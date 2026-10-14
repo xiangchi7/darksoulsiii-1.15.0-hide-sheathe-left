@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.0.4
+
+Makes the effect **symmetric**: two-handing the *left*-hand weapon now hides the right-hand item,
+exactly mirroring what two-handing the right-hand weapon has always done to the left-hand item.
+
+### Added
+* **`HideRightHang`** (default `1`) — hide the model of the sheathed **right**-hand item. The engine
+  reaches that state by two-handing the left-hand weapon, where the right weapon/shield would
+  otherwise be drawn on the back. Field offsets `0x0C/0x16/0x20/0x2A` (`rightHang_0..3`), the exact
+  mirrors of the `leftHang_*` group (`0x0A/0x14/0x1E/0x28`).
+* **`HideBothPaired`** (default `1`) — the paired-weapon spare models are now hidden for **both**
+  hands: `left_1..3` (`0x10/0x1A/0x24`) in addition to the existing `right_1..3`
+  (`0x0E/0x18/0x22`). `PairedFields` selects which model indices to park and applies to both hands.
+* The field table is now described by an explicit per-field kind
+  (`leftHang` / `rightHang` / `pairedR` / `pairedL`) instead of a single boolean, so the left-hand
+  and right-hand paths cannot drift apart.
+
+### Changed
+* `HidePairedOffhand` is superseded by `HideBothPaired`; the old key is still honoured when
+  `HideBothPaired` is absent, so an existing ini keeps working (it only ever covered the right hand).
+* The start-up config line now reports
+  `HideLeftHang=… HideRightHang=… HideBothPaired=… PairedFields=R…/L…`.
+
+### Compatibility
+* Same mechanism, same parking dummy (`382`/`383`), same model patch — **no new asset requirement**.
+  A 1.0.2/1.0.3 installation only needs the new `HideSheathedLeft.dll` (and optionally the ini).
+* Field count per row goes from 7 to 14, so the first pass after start-up writes roughly twice as
+  many values once (`91 rows x 4 tables x 14 fields`); steady state is unchanged, since values are
+  still only written when they actually differ.
+
 ## 1.0.3
 
 Packaging fix: `install.cmd` / `install.ps1` now work in the plain (repository) zip as well, so

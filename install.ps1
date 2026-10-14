@@ -16,10 +16,53 @@
 param(
     [switch]$Status,
     [switch]$SkipModels,
-    [string]$GameDir = 'D:\Steam\steamapps\common\DARK SOULS III\Game'
+    [string]$GameDir = ''
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Where is the game?  A hard-coded D:\... path (as in 1.0.3 and earlier) fails for everyone whose
+# game lives on another drive or in another Steam library, so go looking for it instead:
+#   1. -GameDir, when given (authoritative, even if DarkSoulsIII.exe is not in it)
+#   2. the folder this package was extracted into -- people unzip it next to DarkSoulsIII.exe
+#   3. every Steam library: HKCU\Software\Valve\Steam\SteamPath + steamapps\libraryfolders.vdf
+#   4. the historical default
+function Find-GameDir {
+    if ($GameDir) {
+        if (-not (Test-Path -LiteralPath $GameDir)) { throw "the -GameDir you passed does not exist: $GameDir" }
+        return (Resolve-Path -LiteralPath $GameDir).Path
+    }
+
+    $candidates = @($PSScriptRoot)
+    $steam = (Get-ItemProperty -Path 'HKCU:\Software\Valve\Steam' -Name SteamPath -ErrorAction SilentlyContinue).SteamPath
+    if ($steam) {
+        $libs = @($steam)
+        $vdf = Join-Path $steam 'steamapps\libraryfolders.vdf'
+        if (Test-Path -LiteralPath $vdf) {
+            $text = [System.IO.File]::ReadAllText($vdf)
+            foreach ($m in [regex]::Matches($text, '"path"\s+"([^"]+)"')) {
+                $libs += ($m.Groups[1].Value -replace '\\\\', '\')
+            }
+            if ($libs.Count -eq 1) {    # older Steam lists them as "1"  "D:\Steam"
+                foreach ($m in [regex]::Matches($text, '"\d+"\s+"([A-Za-z]:[^"]+)"')) {
+                    $libs += ($m.Groups[1].Value -replace '\\\\', '\')
+                }
+            }
+        }
+        foreach ($lib in $libs) { $candidates += (Join-Path $lib 'steamapps\common\DARK SOULS III\Game') }
+    }
+    $candidates += 'D:\Steam\steamapps\common\DARK SOULS III\Game'
+    $candidates = $candidates | Select-Object -Unique
+
+    foreach ($c in $candidates) {
+        if ($c -and (Test-Path -LiteralPath (Join-Path $c 'DarkSoulsIII.exe'))) { return (Resolve-Path -LiteralPath $c).Path }
+    }
+    throw ("game dir not found.  Tried:`n  " + ($candidates -join "`n  ") +
+           "`n`nPass the folder that contains DarkSoulsIII.exe, for example:`n" +
+           "  powershell -ExecutionPolicy Bypass -File install.ps1 -GameDir `"F:\STEAM\steamapps\common\DARK SOULS III\Game`"")
+}
+$GameDir = Find-GameDir
+if (-not $Status) { Write-Host "game dir: $GameDir" }
 
 # The payload lives in files\ inside the install package.  The plain (repository) zip has no files\
 # folder -- there the payload sits next to this script -- so fall back to the script directory and

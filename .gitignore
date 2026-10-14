@@ -19,3 +19,6 @@ chr-stripped/
 chr-patched/
 probes/out/
 dumps/
+
+# local staging/build output
+dist-*/

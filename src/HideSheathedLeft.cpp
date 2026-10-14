@@ -54,7 +54,7 @@
 
 namespace {
 
-constexpr char     kVersion[]     = "1.0.3";
+constexpr char     kVersion[]     = "1.0.4";
 constexpr char     kParamName[]   = "WEP_ABSORP_POS_PARAM_ST";
 constexpr uint64_t kLengthOff     = 0x0A;   // u16 row count inside ParamTable
 constexpr uint64_t kNameOffsetOff = 0x10;   // u64 offset of the snake-case name
@@ -68,26 +68,49 @@ constexpr int      kParkPolyDefault = 382;  // parking dummy appended to EVERY c
 constexpr uint32_t kScanChunk     = 4u << 20;
 constexpr uint64_t kResolveWindow = 0x100000;
 
-// The fields the mod manages: 4 left-hang slots + 3 paired off-hand models.
-constexpr int kFieldCount = 7;
-const int  kFieldOff[kFieldCount] = {0x0A, 0x14, 0x1E, 0x28, 0x0E, 0x18, 0x22};
-const bool kFieldIsLeftHang[kFieldCount] = {true, true, true, true,
-                                            false, false, false};
+// The fields the mod manages.  The two hands are mirror images:
+//   0..3   leftHang_0..3   the LEFT-hand item while it is sheathed
+//   4..7   rightHang_0..3  the RIGHT-hand item while it is sheathed
+//   8..10  right_1..3      the spare models of a paired weapon used one-handed RIGHT
+//   11..13 left_1..3       the spare models of a paired weapon used one-handed LEFT
+constexpr int kFieldCount = 14;
+const int  kFieldOff[kFieldCount] = {
+    0x0A, 0x14, 0x1E, 0x28,   // leftHang_0..3
+    0x0C, 0x16, 0x20, 0x2A,   // rightHang_0..3
+    0x0E, 0x18, 0x22,         // right_1..3
+    0x10, 0x1A, 0x24,         // left_1..3     (paired models 1..3)
+};
+
+enum FieldKind {
+    kLeftHang  = 0,   // sheathed LEFT-hand item
+    kRightHang = 1,   // sheathed RIGHT-hand item
+    kPairedR   = 2,   // one-handed RIGHT paired weapon: spare models 1..3
+    kPairedL   = 3,   // one-handed LEFT  paired weapon: spare models 1..3
+};
+const uint8_t kFieldKind[kFieldCount] = {
+    kLeftHang, kLeftHang, kLeftHang, kLeftHang,
+    kRightHang, kRightHang, kRightHang, kRightHang,
+    kPairedR, kPairedR, kPairedR,
+    kPairedL, kPairedL, kPairedL,
+};
+// index of the model this paired field belongs to: right_1/left_1 -> 0, _2 -> 1, _3 -> 2
+const int kPairedIndex[kFieldCount] = {-1, -1, -1, -1, -1, -1, -1, -1,
+                                       0, 1, 2, 0, 1, 2};
 
 struct Config {
     bool hideLeftHang      = true;
+    bool hideRightHang     = true;   // symmetric: hide the RIGHT item while it is sheathed
     bool hidePairedOffhand = true;
     bool log               = true;
     int  intervalMs        = 1000;  // 1 s: keeps the window in which the engine's
                                     // own (vanilla) values could be live as short
                                     // as possible after any param-table reload
     int  hidePoly          = kParkPolyDefault;  // -1 = old behaviour (invalid poly)
-    // which models of the RIGHT hand are hidden while it is used one-handed:
-    // 1 = the spare blade (paired weapons), 2/3 = the scabbard/extra models some
-    // weapons carry -- those are deliberately opt-in
-    bool paired1           = true;
-    bool paired2           = true;
-    bool paired3           = true;
+    // Which models of a paired weapon are hidden while it is used one-handed.
+    // 1 = the spare blade, 2/3 = the scabbard/extra models some weapons carry --
+    // those are deliberately opt-in.  Index 0..2 == model 1..3.
+    bool pairedR[3]        = {true, true, true};
+    bool pairedL[3]        = {true, true, true};
     // Probe=1: write NOTHING.  Instead put PAGE_GUARD on the pages that hold the
     // WepAbsorpPosParam row data and log who reads them (RIP, registers, the
     // faulting offset) -- used to locate the engine's attach resolver so the mod
@@ -161,8 +184,18 @@ std::wstring ModuleDir(HMODULE mod) {
 void LoadConfig() {
     Config c;
     c.hideLeftHang      = GetPrivateProfileIntW(L"general", L"HideLeftHang", 1, g_iniPath.c_str()) != 0;
-    c.hidePairedOffhand = GetPrivateProfileIntW(L"general", L"HidePairedOffhand", 1, g_iniPath.c_str()) != 0;
     c.log               = GetPrivateProfileIntW(L"general", L"Log", 1, g_iniPath.c_str()) != 0;
+
+    // HidePairedOffhand is the 1.0.x name and still works; HideBothPaired is the new
+    // one and, when present, wins.  Both hands are symmetric, so one key drives both.
+    const UINT bothPairedRaw = GetPrivateProfileIntW(L"general", L"HideBothPaired", 0xFFFFFF, g_iniPath.c_str());
+    c.hidePairedOffhand = (bothPairedRaw != 0xFFFFFF)
+                              ? (bothPairedRaw != 0)
+                              : (GetPrivateProfileIntW(L"general", L"HidePairedOffhand", 1, g_iniPath.c_str()) != 0);
+
+    // Symmetric twin of HideLeftHang: hide the RIGHT-hand item while it is sheathed.
+    // This is the state reached by two-handing the LEFT-hand weapon.
+    c.hideRightHang = GetPrivateProfileIntW(L"general", L"HideRightHang", 1, g_iniPath.c_str()) != 0;
     // Re-applied every IntervalSeconds.  The engine can rewrite these fields from
     // its own regulation data (equipment change, area transition, param reload);
     // until the next pass the vanilla value is live, so this interval is the
@@ -177,18 +210,22 @@ void LoadConfig() {
     if (poly > 32000) poly = 32000;
     c.hidePoly = poly;
 
-    // PairedFields = which right-hand model indices to park, e.g. "1" or "1,2,3".
-    // Anything not listed is left at its original value.
+    // PairedFields = which model indices of a paired weapon to park, e.g. "1" or "1,2,3".
+    // Anything not listed is left at its original value.  Applied to BOTH hands: the
+    // left-hand paired path is the exact mirror of the right-hand one.
     wchar_t pf[64] = {0};
     GetPrivateProfileStringW(L"general", L"PairedFields", L"1,2,3", pf, 63, g_iniPath.c_str());
-    c.paired1 = c.paired2 = c.paired3 = false;
+    for (int i = 0; i < 3; ++i) c.pairedR[i] = c.pairedL[i] = false;
     for (const wchar_t* q = pf; *q; ++q) {
-        if (*q == L'1') c.paired1 = true;
-        else if (*q == L'2') c.paired2 = true;
-        else if (*q == L'3') c.paired3 = true;
+        if (*q >= L'1' && *q <= L'3') {
+            const int i = (int)(*q - L'1');
+            c.pairedR[i] = true;
+            c.pairedL[i] = true;
+        }
     }
-    if (!c.paired1 && !c.paired2 && !c.paired3 && wcsstr(pf, L"none") == nullptr) {
-        c.paired1 = true;  // unparsable value: fall back to the spare blade only
+    if (!c.pairedR[0] && !c.pairedR[1] && !c.pairedR[2] && wcsstr(pf, L"none") == nullptr) {
+        c.pairedR[0] = true;  // unparsable value: fall back to the spare blade only
+        c.pairedL[0] = true;
     }
 
     c.scanMapped   = GetPrivateProfileIntW(L"general", L"ScanMapped", 0, g_iniPath.c_str()) != 0;
@@ -208,12 +245,16 @@ void LoadConfig() {
     c.probeRearmMs = pr;
 
     const bool changed = (c.hideLeftHang != g_cfg.hideLeftHang) ||
+                         (c.hideRightHang != g_cfg.hideRightHang) ||
                          (c.hidePairedOffhand != g_cfg.hidePairedOffhand) ||
                          (c.intervalMs != g_cfg.intervalMs) ||
                          (c.hidePoly != g_cfg.hidePoly) ||
-                         (c.paired1 != g_cfg.paired1) ||
-                         (c.paired2 != g_cfg.paired2) ||
-                         (c.paired3 != g_cfg.paired3) ||
+                         (c.pairedR[0] != g_cfg.pairedR[0]) ||
+                         (c.pairedR[1] != g_cfg.pairedR[1]) ||
+                         (c.pairedR[2] != g_cfg.pairedR[2]) ||
+                         (c.pairedL[0] != g_cfg.pairedL[0]) ||
+                         (c.pairedL[1] != g_cfg.pairedL[1]) ||
+                         (c.pairedL[2] != g_cfg.pairedL[2]) ||
                          (c.probe != g_cfg.probe) ||
                          (c.probeAll != g_cfg.probeAll) ||
                          (c.probeLimit != g_cfg.probeLimit) ||
@@ -223,9 +264,10 @@ void LoadConfig() {
     // the fields are pointed at even when nothing was changed from the defaults
     if (changed || !g_loggedConfig) {
         g_loggedConfig = true;
-        Log("config: HideLeftHang=%d HidePairedOffhand=%d PairedFields=%d%d%d IntervalSeconds=%d Log=%d HidePoly=%d Probe=%d ScanMapped=%d Rescan=%d",
-            (int)g_cfg.hideLeftHang, (int)g_cfg.hidePairedOffhand,
-            (int)g_cfg.paired1, (int)g_cfg.paired2, (int)g_cfg.paired3,
+        Log("config: HideLeftHang=%d HideRightHang=%d HideBothPaired=%d PairedFields=R%d%d%d/L%d%d%d IntervalSeconds=%d Log=%d HidePoly=%d Probe=%d ScanMapped=%d Rescan=%d",
+            (int)g_cfg.hideLeftHang, (int)g_cfg.hideRightHang, (int)g_cfg.hidePairedOffhand,
+            (int)g_cfg.pairedR[0], (int)g_cfg.pairedR[1], (int)g_cfg.pairedR[2],
+            (int)g_cfg.pairedL[0], (int)g_cfg.pairedL[1], (int)g_cfg.pairedL[2],
             g_cfg.intervalMs / 1000, (int)g_cfg.log, g_cfg.hidePoly, (int)g_cfg.probe,
             (int)g_cfg.scanMapped, (int)g_cfg.allowRescan);
     }
@@ -308,11 +350,18 @@ int ApplyTable(TableState& st, int* writesOut) {
             st.have[i] = 1;
         }
         for (int f = 0; f < kFieldCount; ++f) {
-            // f 0..3 = leftHang_0..3, f 4..6 = right_1..3
-            const bool enabled = kFieldIsLeftHang[f]
-                                     ? g_cfg.hideLeftHang
-                                     : (g_cfg.hidePairedOffhand &&
-                                        (f == 4 ? g_cfg.paired1 : f == 5 ? g_cfg.paired2 : g_cfg.paired3));
+            // The two hands are mirror images:
+            //   leftHang  -> the left item, sheathed (reached by two-handing RIGHT)
+            //   rightHang -> the right item, sheathed (reached by two-handing LEFT)
+            //   right_1..3 / left_1..3 -> spare models of a one-handed paired weapon
+            bool enabled = false;
+            switch (kFieldKind[f]) {
+                case kLeftHang:  enabled = g_cfg.hideLeftHang;  break;
+                case kRightHang: enabled = g_cfg.hideRightHang; break;
+                case kPairedR:   enabled = g_cfg.hidePairedOffhand && g_cfg.pairedR[kPairedIndex[f]]; break;
+                case kPairedL:   enabled = g_cfg.hidePairedOffhand && g_cfg.pairedL[kPairedIndex[f]]; break;
+                default:         break;
+            }
             const uint16_t park = (g_cfg.hidePoly < 0)
                                       ? kInvalidPoly
                                       : (uint16_t)(int16_t)g_cfg.hidePoly;

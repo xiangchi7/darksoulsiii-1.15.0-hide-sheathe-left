@@ -1,8 +1,9 @@
 # HideSheathedLeft — Dark Souls III 1.15.0
 
-While you two-hand the right-hand weapon, the **left-hand item's sheathed model is no longer
-drawn on your back**. Works for anything hand-equippable: weapons, shields, catalysts, bows,
-staves.
+While you two-hand one hand's weapon, the **other hand's sheathed model is no longer drawn on your
+back**. The behaviour is symmetric: two-hand the right weapon and the left item disappears; two-hand
+the left weapon and the right item disappears. Works for anything hand-equippable: weapons, shields,
+catalysts, bows, staves.
 
 > Dark Souls III **1.15.0** (Steam, 64-bit). Local memory + model changes only. Online play has
 > a server-side save sanity check — use it offline.
@@ -14,14 +15,15 @@ staves.
 | Situation | Vanilla | With this mod |
 |---|---|---|
 | Right-hand weapon **two-handed**, left hand occupied | left item hangs on your back | left item is **not drawn** |
-| Left item **in use** (blocking / swinging) | drawn normally | **drawn normally** (unaffected) |
-| **Paired weapon** in the right hand, one-handed | spare model sits on the body | spare model **not drawn** (`PairedFields` can hide only the blade and keep the scabbard) |
+| **Left-hand** weapon two-handed, right hand occupied | right item hangs on your back | right item is **not drawn** |
+| The stowed item **in use** (blocking / swinging) | drawn normally | **drawn normally** (unaffected) |
+| **Paired weapon** held one-handed (either hand) | spare model sits on the body | spare model **not drawn** (`PairedFields` can hide only the blade and keep the scabbard) |
 
-**How (1.0.2):** the `leftHang_0..3` and `right_1..3` fields of `WepAbsorpPosParam` are pointed at
-a **parking dummy** (id `382`, with `383` as a spare) that sits **1000 m below the character**.
-The model is still attached, just far outside the world — so nothing is drawn, and because the
-dummy is a *real* dummy (not an invalid poly like `-1` in 1.0.0) the engine builds a valid matrix,
-which removes the 1.0.0 **black triangles / full-screen flicker**.
+**How:** the `leftHang_0..3` / `rightHang_0..3` and `right_1..3` / `left_1..3` fields of
+`WepAbsorpPosParam` are pointed at a **parking dummy** (id `382`, with `383` as a spare) that sits
+**1000 m below the character**. The model is still attached, just far outside the world — so nothing
+is drawn, and because the dummy is a *real* dummy (not an invalid poly like `-1` in 1.0.0) the engine
+builds a valid matrix, which removes the 1.0.0 **black triangles / full-screen flicker**.
 
 The parking dummies are appended to **every character model** (`chr\*.chrbnd.dcx`), so no
 character — player or NPC — can ever resolve a missing dummy.
@@ -75,13 +77,19 @@ tools\ds3tae.exe stripdir "<game>\chr" INPLACE "382,383" "chrbnd"
 
 | Key | Default | Meaning |
 |---|---|---|
-| `HideLeftHang` | `1` | the core effect: hide the sheathed left-hand item |
-| `HidePairedOffhand` | `1` | hide the spare model of a one-handed paired weapon |
-| `PairedFields` | `1,2,3` | which right-hand models to hide: `1` = blade only (keeps the scabbard), `none` = leave the right hand alone |
+| `HideLeftHang` | `1` | hide the sheathed left-hand item (reached by two-handing the **right** weapon) |
+| `HideRightHang` | `1` | mirror image: hide the sheathed right-hand item (reached by two-handing the **left** weapon) |
+| `HideBothPaired` | `1` | hide the spare model of a one-handed paired weapon, **both hands** |
+| `PairedFields` | `1,2,3` | which models of a paired weapon to hide: `1` = blade only (keeps the scabbard), `none` = leave paired weapons alone |
 | `HidePoly` | `382` | parking dummy id (`383` spare, `-1` reproduces the 1.0.0 artefacts) |
 | `IntervalSeconds` | `1` | how often the parameter values are re-asserted |
 | `Probe` | `0` | `1` = observation only (writes nothing, logs to `HideSheathedLeft.log`) |
 | `ExtraMods` | *(empty)* | must stay empty — loading additional DLLs on 1.15.0 crashes the game |
+
+Setting `HideLeftHang=0` restores vanilla for the right-hand two-hand stance only; setting
+`HideRightHang=0` does the same for the left-hand two-hand stance. The older key
+`HidePairedOffhand` is still read when `HideBothPaired` is absent (it only ever covered the
+right hand).
 
 ---
 
