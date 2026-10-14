@@ -6,7 +6,7 @@
 # The build uses the Visual Studio Build Tools that are already installed.
 
 param(
-  [string]$OutDir  = (Join-Path $PSScriptRoot 'dist'),
+  [string]$OutDir  = '',
   [string]$GameDir = 'D:\Steam\steamapps\common\DARK SOULS III\Game',
   [switch]$Install
 )
@@ -20,8 +20,13 @@ if (-not $vs) { throw 'MSVC x64 build tools not found' }
 $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
 if (-not (Test-Path -LiteralPath $vcvars)) { throw "vcvars64.bat not found: $vcvars" }
 
-$src = Join-Path $PSScriptRoot 'src'
-New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+# This script lives in src\, so the sources are next to it -- do not join another 'src'
+# (that produced "...\src\src\HideSheathedLeft.cpp" and every build failed with C1083).
+$src = $PSScriptRoot
+$repo = Split-Path -Parent $PSScriptRoot
+if (-not (Test-Path -LiteralPath (Join-Path $repo 'tools\patch-character-models.ps1'))) { $repo = $PSScriptRoot }
+if (-not $OutDir) { $OutDir = Join-Path $repo 'dist' }
+if (-not (Test-Path -LiteralPath $OutDir)) { New-Item -ItemType Directory -Force -Path $OutDir | Out-Null }
 
 $bat = Join-Path $env:TEMP 'hsl_build.bat'
 $lines = @(
@@ -36,7 +41,7 @@ Set-Content -LiteralPath $bat -Value $lines -Encoding ascii
 & cmd /c $bat
 if ($LASTEXITCODE -ne 0) { throw "build failed (exit $LASTEXITCODE)" }
 
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'HideSheathedLeft.ini') -Destination $OutDir -Force
+Copy-Item -LiteralPath (Join-Path $repo 'HideSheathedLeft.ini') -Destination $OutDir -Force
 
 Get-ChildItem -LiteralPath $OutDir -Filter '*.dll' | Select-Object Name, Length, LastWriteTime | Format-Table -AutoSize
 Write-Host "built -> $OutDir"

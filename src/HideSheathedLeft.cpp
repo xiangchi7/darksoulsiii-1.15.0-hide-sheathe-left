@@ -54,7 +54,7 @@
 
 namespace {
 
-constexpr char     kVersion[]     = "1.0.4";
+constexpr char     kVersion[]     = "1.0.5";
 constexpr char     kParamName[]   = "WEP_ABSORP_POS_PARAM_ST";
 constexpr uint64_t kLengthOff     = 0x0A;   // u16 row count inside ParamTable
 constexpr uint64_t kNameOffsetOff = 0x10;   // u64 offset of the snake-case name

@@ -26,6 +26,9 @@ internal static class Program
             switch (args[0])
             {
                 case "validate": return Validate(args.Skip(1).ToArray());
+                case "verify": return VerifyDir(args[1],
+                                                args.Length > 2 ? args[2] : "chrbnd",
+                                                args.Length > 3 ? args[3] : "382,383");
                 case "scanid": return ScanId(args[1], args[2], args.Length > 3 ? args[3] : null);
                 case "dumpids": return DumpIds(args[1], args[2], args.Length > 3 ? args[3] : null);
                 case "flverdiff": return FlverDiff(args[1], args[2]);
@@ -59,7 +62,22 @@ internal static class Program
 
     private static void Usage()
     {
-        Console.WriteLine("usage: validate <file>... | dump710 <file> | add <in> <out> <spec.tsv> | roundtrip <in> <out>");
+        Console.WriteLine("usage: ds3tae <command> [args]");
+        Console.WriteLine();
+        Console.WriteLine("  validate   <file>...                          parse bundle + every TAE, report 710 events");
+        Console.WriteLine("  dummies    <file>                             list the dummy nodes of every FLVER");
+        Console.WriteLine("  scanid     <root> <id,id,...> [nameFilter]    which files under <root> carry these dummy ids");
+        Console.WriteLine("  verify     <root> [nameFilter] [id,id,...]    prove a restore: no parking dummies left");
+        Console.WriteLine("  stripdir   <root> <outRoot|INPLACE> <id,id,..> [nameFilter] [DRYRUN]");
+        Console.WriteLine("                                                remove those dummy ids (the install-time inverse)");
+        Console.WriteLine("  parkdir    <root> <outRoot|INPLACE> <id,id,..> [pos] [parentBone] [nameFilter] [DRYRUN]");
+        Console.WriteLine("                                                append those dummies (the install-time patch)");
+        Console.WriteLine("  park       <in> <out> [refId] [pos] [parentBone] [moveId]");
+        Console.WriteLine("  dumpids    <root> <out.tsv> [nameFilter]");
+        Console.WriteLine("  flverdiff  <a> <b>");
+        Console.WriteLine("  inspect    <filter> | dump710 <file> | add <in> <out> <spec.tsv> | roundtrip <in> <out>");
+        Console.WriteLine();
+        Console.WriteLine("exit codes: 0 = everything handled, 1 = at least one file failed, 2 = bad usage");
     }
 
     private static bool s_quiet;
@@ -161,7 +179,9 @@ internal static class Program
         Console.WriteLine($"scanned {files} file(s), {withFlver} with an FLVER, unreadable={failed}");
         Console.WriteLine($"files containing {string.Join("/", wanted)}: {hits}");
         Console.WriteLine($"highest dummy ReferenceID seen anywhere: {overallMax} (in {maxWhere})");
-        return hits > 0 ? 1 : 0;
+        // 0 = the scan was conclusive ("hits found" is a result, not a failure); 1 = a file could
+        // not be read, which is the only thing a caller has to worry about.
+        return failed > 0 ? 1 : 0;
     }
 
     /// <summary>
@@ -367,9 +387,15 @@ internal static class Program
         Path.GetFileName((f.Name ?? "").Replace('\\', '/'));
 
     /// <summary>
-    /// Undo `parkdir`: remove exactly the given dummy ids from every bundle under a root,
-    /// verifying that bones/materials/meshes/layouts are untouched and that every
-    /// remaining dummy entry kept its order and values.
+    /// Undo `parkdir`: remove exactly the given dummy ids from EVERY FLVER of every bundle
+    /// under a root, verifying that bones/materials/meshes/layouts are untouched and that
+    /// every remaining dummy entry kept its order and values.
+    ///
+    /// NOTE: this is a *structural* undo, not a byte-exact one.  Re-serialising the bundle
+    /// and re-compressing the DCX produces a different (usually slightly larger) file than
+    /// the pre-patch original, so `restore.ps1` prefers the `*.vanilla-backup` copy that
+    /// `install.ps1` leaves behind.  This command is the fallback for installations that
+    /// have no backup.
     /// </summary>
     private static int StripDir(string root, string outRoot, string idArg, string nameFilter, bool dryRun)
     {
@@ -394,50 +420,65 @@ internal static class Program
                 byte[] payload = DCX.Is(raw) ? DCX.Decompress(raw, out dcxType) : raw;
                 BND4 bnd = BND4.Read(payload);
 
-                BinderFile target = null;
+                // every FLVER of the bundle, not just the first one: parkdir patches them all
+                var flvers = new List<FLVER2>();
                 foreach (BinderFile bf in bnd.Files)
-                    if (EntryName(bf).EndsWith(".flver", StringComparison.OrdinalIgnoreCase)) { target = bf; break; }
-                if (target == null) { skipped++; continue; }
+                    if (EntryName(bf).EndsWith(".flver", StringComparison.OrdinalIgnoreCase)) flvers.Add(FLVER2.Read(bf.Bytes));
+                if (flvers.Count == 0) { skipped++; continue; }
 
-                FLVER2 flver = FLVER2.Read(target.Bytes);
-                int gone = flver.Dummies.Count(d => ids.Contains(d.ReferenceID));
+                int gone = flvers.Sum(v => v.Dummies.Count(d => ids.Contains(d.ReferenceID)));
                 if (gone == 0) { already++; continue; }
 
-                string beforeBones = Digest(Bones(flver));
-                string beforeMats = Digest(Materials(flver));
-                string beforeMeshes = Digest(Meshes(flver));
-                string beforeLayouts = Digest(Layouts(flver));
-                int beforeCount = flver.Dummies.Count;
-                var expected = flver.Dummies.Where(d => !ids.Contains(d.ReferenceID))
-                                            .Select(d => (d.ReferenceID, d.ParentBoneIndex, d.AttachBoneIndex, d.Position)).ToList();
-
-                flver.Dummies.RemoveAll(d => ids.Contains(d.ReferenceID));
-                target.Bytes = flver.Write();
-                byte[] newPayload = bnd.Write();
-                byte[] outBytes = dcxType == DCX.Type.None ? newPayload : DCX.Compress(newPayload, dcxType);
+                var before = new List<(string bones, string mats, string meshes, string layouts, int count, List<(short, short, short, System.Numerics.Vector3)> expected)>();
+                foreach (FLVER2 v in flvers)
+                    before.Add((Digest(Bones(v)), Digest(Materials(v)), Digest(Meshes(v)), Digest(Layouts(v)), v.Dummies.Count,
+                                v.Dummies.Where(d => !ids.Contains(d.ReferenceID))
+                                         .Select(d => (d.ReferenceID, d.ParentBoneIndex, d.AttachBoneIndex, d.Position)).ToList()));
 
                 if (dryRun)
                 {
-                    Console.WriteLine($"  would strip {Path.GetFileName(f)}: -{gone} dummy(s) ({beforeCount} -> {flver.Dummies.Count})");
+                    Console.WriteLine($"  would strip {Path.GetFileName(f)}: -{gone} dummy(s) in {flvers.Count} flver(s)");
                     cleaned++;
                     removedTotal += gone;
                     continue;
                 }
 
+                int k = 0;
+                foreach (BinderFile bf in bnd.Files)
+                {
+                    if (!EntryName(bf).EndsWith(".flver", StringComparison.OrdinalIgnoreCase)) continue;
+                    FLVER2 v = flvers[k++];
+                    v.Dummies.RemoveAll(d => ids.Contains(d.ReferenceID));
+                    bf.Bytes = v.Write();
+                }
+                byte[] newPayload = bnd.Write();
+                byte[] outBytes = dcxType == DCX.Type.None ? newPayload : DCX.Compress(newPayload, dcxType);
+
+                // re-read what is about to be written and prove nothing else moved
                 DCX.Type t2;
                 byte[] back = DCX.Is(outBytes) ? DCX.Decompress(outBytes, out t2) : outBytes;
-                FLVER2 backFlver = null;
+                var backFlvers = new List<FLVER2>();
                 foreach (BinderFile bf in BND4.Read(back).Files)
-                    if (EntryName(bf).EndsWith(".flver", StringComparison.OrdinalIgnoreCase)) { backFlver = FLVER2.Read(bf.Bytes); break; }
-                bool ok = backFlver != null && backFlver.Dummies.Count == flver.Dummies.Count &&
-                          Digest(Bones(backFlver)) == beforeBones && Digest(Materials(backFlver)) == beforeMats &&
-                          Digest(Meshes(backFlver)) == beforeMeshes && Digest(Layouts(backFlver)) == beforeLayouts;
-                for (int i = 0; ok && i < expected.Count; ++i)
+                    if (EntryName(bf).EndsWith(".flver", StringComparison.OrdinalIgnoreCase)) backFlvers.Add(FLVER2.Read(bf.Bytes));
+                bool ok = backFlvers.Count == before.Count;
+                if (!ok) Console.WriteLine($"  dbg {Path.GetFileName(f)}: flver count {before.Count} -> {backFlvers.Count}");
+                for (int i = 0; ok && i < before.Count; ++i)
                 {
-                    var a = expected[i];
-                    var b = backFlver.Dummies[i];
-                    if (a.ReferenceID != b.ReferenceID || a.ParentBoneIndex != b.ParentBoneIndex ||
-                        a.AttachBoneIndex != b.AttachBoneIndex || a.Position != b.Position) ok = false;
+                    FLVER2 b = backFlvers[i];
+                    var a = before[i];
+                    if (b.Dummies.Count != a.expected.Count) { ok = false; Console.WriteLine($"  REJECTED {Path.GetFileName(f)}: dummy count {a.expected.Count} -> {b.Dummies.Count}"); }
+                    else if (Digest(Bones(b)) != a.bones) { ok = false; Console.WriteLine($"  REJECTED {Path.GetFileName(f)}: bones changed"); }
+                    else if (Digest(Materials(b)) != a.mats) { ok = false; Console.WriteLine($"  REJECTED {Path.GetFileName(f)}: materials changed"); }
+                    else if (Digest(Meshes(b)) != a.meshes) { ok = false; Console.WriteLine($"  REJECTED {Path.GetFileName(f)}: meshes changed"); }
+                    else if (Digest(Layouts(b)) != a.layouts) { ok = false; Console.WriteLine($"  REJECTED {Path.GetFileName(f)}: layouts changed"); }
+                    for (int j = 0; ok && j < a.expected.Count; ++j)
+                    {
+                        var e = a.expected[j];
+                        var g = b.Dummies[j];
+                        if (e.Item1 != g.ReferenceID || e.Item2 != g.ParentBoneIndex ||
+                            e.Item3 != g.AttachBoneIndex || e.Item4 != g.Position)
+                        { ok = false; Console.WriteLine($"  REJECTED {Path.GetFileName(f)}: dummy {j} moved (id {e.Item1}->{g.ReferenceID})"); }
+                    }
                 }
                 if (!ok)
                 {
@@ -451,7 +492,7 @@ internal static class Program
                 File.WriteAllBytes(outPath, outBytes);
                 cleaned++;
                 removedTotal += gone;
-                Console.WriteLine($"  stripped {Path.GetFileName(f)}: -{gone} dummy(s) ({beforeCount} -> {flver.Dummies.Count}) {raw.Length} -> {outBytes.Length} bytes");
+                Console.WriteLine($"  stripped {Path.GetFileName(f)}: -{gone} dummy(s) {raw.Length} -> {outBytes.Length} bytes");
             }
             catch (Exception ex)
             {
@@ -500,81 +541,93 @@ internal static class Program
                 byte[] payload = DCX.Is(raw) ? DCX.Decompress(raw, out dcxType) : raw;
                 BND4 bnd = BND4.Read(payload);
 
-                BinderFile target = null;
+                // every FLVER of the bundle, not just the first one
+                var flvers = new List<FLVER2>();
                 foreach (BinderFile bf in bnd.Files)
-                    if (EntryName(bf).EndsWith(".flver", StringComparison.OrdinalIgnoreCase)) { target = bf; break; }
-                if (target == null) { skipped++; continue; }
+                    if (EntryName(bf).EndsWith(".flver", StringComparison.OrdinalIgnoreCase)) flvers.Add(FLVER2.Read(bf.Bytes));
+                if (flvers.Count == 0) { skipped++; continue; }
 
-                FLVER2 flver = FLVER2.Read(target.Bytes);
-                var have = new HashSet<short>(flver.Dummies.Select(d => d.ReferenceID));
-                var missing = ids.Where(i => !have.Contains(i)).ToArray();
+                // a file that already carries all ids in every FLVER is left completely alone
+                var missing = ids.Where(i => flvers.Any(v => !v.Dummies.Any(d => d.ReferenceID == i))).ToArray();
                 if (missing.Length == 0) { already++; continue; }
 
-                string beforeBones = Digest(Bones(flver));
-                string beforeMats = Digest(Materials(flver));
-                string beforeMeshes = Digest(Meshes(flver));
-                string beforeLayouts = Digest(Layouts(flver));
-                int beforeDummies = flver.Dummies.Count;
-                var beforeList = flver.Dummies
-                    .Select(d => (d.ReferenceID, d.ParentBoneIndex, d.AttachBoneIndex, d.Position)).ToList();
-
-                FLVER.Dummy proto = flver.Dummies.FirstOrDefault(d => d.AttachBoneIndex < 0) ?? flver.Dummies[0];
-                foreach (short id in missing)
-                {
-                    flver.Dummies.Add(new FLVER.Dummy
-                    {
-                        ReferenceID = id,
-                        ParentBoneIndex = (short)parentBone,
-                        AttachBoneIndex = -1,
-                        Position = new System.Numerics.Vector3(pos[0], pos[1], pos[2]),
-                        Forward = proto.Forward,
-                        Upward = proto.Upward,
-                        Color = proto.Color,
-                        Flag1 = proto.Flag1,
-                        UseUpwardVector = proto.UseUpwardVector,
-                        Unk30 = proto.Unk30,
-                        Unk34 = proto.Unk34,
-                    });
-                }
-                target.Bytes = flver.Write();
-                byte[] newPayload = bnd.Write();
-                byte[] outBytes = dcxType == DCX.Type.None ? newPayload : DCX.Compress(newPayload, dcxType);
+                var before = new List<(string bones, string mats, string meshes, string layouts, int count, List<(short, short, short, System.Numerics.Vector3)> list)>();
+                foreach (FLVER2 v in flvers)
+                    before.Add((Digest(Bones(v)), Digest(Materials(v)), Digest(Meshes(v)), Digest(Layouts(v)), v.Dummies.Count,
+                                v.Dummies.Select(d => (d.ReferenceID, d.ParentBoneIndex, d.AttachBoneIndex, d.Position)).ToList()));
 
                 if (dryRun)
                 {
-                    Console.WriteLine($"  would patch {Path.GetFileName(f)}: +{string.Join(",", missing)} ({beforeDummies} -> {flver.Dummies.Count} dummies)");
+                    Console.WriteLine($"  would patch {Path.GetFileName(f)}: +{string.Join(",", missing)} in {flvers.Count} flver(s)");
                     patched++;
                     appended += missing.Length;
                     continue;
                 }
 
+                int flv = 0;
+                foreach (BinderFile bf in bnd.Files)
+                {
+                    if (!EntryName(bf).EndsWith(".flver", StringComparison.OrdinalIgnoreCase)) continue;
+                    FLVER2 v = flvers[flv++];
+                    var have = new HashSet<short>(v.Dummies.Select(d => d.ReferenceID));
+                    if (v.Dummies.Count == 0) continue;
+                    FLVER.Dummy proto = v.Dummies.FirstOrDefault(d => d.AttachBoneIndex < 0) ?? v.Dummies[0];
+                    foreach (short id in ids.Where(i => !have.Contains(i)))
+                    {
+                        v.Dummies.Add(new FLVER.Dummy
+                        {
+                            ReferenceID = id,
+                            ParentBoneIndex = (short)parentBone,
+                            AttachBoneIndex = -1,
+                            Position = new System.Numerics.Vector3(pos[0], pos[1], pos[2]),
+                            Forward = proto.Forward,
+                            Upward = proto.Upward,
+                            Color = proto.Color,
+                            Flag1 = proto.Flag1,
+                            UseUpwardVector = proto.UseUpwardVector,
+                            Unk30 = proto.Unk30,
+                            Unk34 = proto.Unk34,
+                        });
+                    }
+                    bf.Bytes = v.Write();
+                }
+                byte[] newPayload = bnd.Write();
+                byte[] outBytes = dcxType == DCX.Type.None ? newPayload : DCX.Compress(newPayload, dcxType);
+
                 // re-read what we are about to write and prove nothing else moved
                 DCX.Type t2;
                 byte[] back = DCX.Is(outBytes) ? DCX.Decompress(outBytes, out t2) : outBytes;
-                BND4 backBnd = BND4.Read(back);
-                FLVER2 backFlver = null;
-                foreach (BinderFile bf in backBnd.Files)
-                    if (EntryName(bf).EndsWith(".flver", StringComparison.OrdinalIgnoreCase)) { backFlver = FLVER2.Read(bf.Bytes); break; }
-                if (backFlver == null || backFlver.Dummies.Count != flver.Dummies.Count ||
-                    Digest(Bones(backFlver)) != beforeBones || Digest(Materials(backFlver)) != beforeMats ||
-                    Digest(Meshes(backFlver)) != beforeMeshes || Digest(Layouts(backFlver)) != beforeLayouts)
+                var backFlvers = new List<FLVER2>();
+                foreach (BinderFile bf in BND4.Read(back).Files)
+                    if (EntryName(bf).EndsWith(".flver", StringComparison.OrdinalIgnoreCase)) backFlvers.Add(FLVER2.Read(bf.Bytes));
+                bool ok = backFlvers.Count == before.Count;
+                if (!ok) Console.WriteLine($"  REJECTED {Path.GetFileName(f)}: flver count {before.Count} -> {backFlvers.Count}");
+                for (int i = 0; ok && i < before.Count; ++i)
+                {
+                    FLVER2 b = backFlvers[i];
+                    var a = before[i];
+                    int expectCount = a.count + ids.Count(id => !a.list.Any(e => e.Item1 == id));
+                    if (b.Dummies.Count != expectCount) { ok = false; Console.WriteLine($"  REJECTED {Path.GetFileName(f)}: dummy count {a.count} -> {b.Dummies.Count}, expected {expectCount}"); }
+                    else if (Digest(Bones(b)) != a.bones) { ok = false; Console.WriteLine($"  REJECTED {Path.GetFileName(f)}: bones changed"); }
+                    else if (Digest(Materials(b)) != a.mats) { ok = false; Console.WriteLine($"  REJECTED {Path.GetFileName(f)}: materials changed"); }
+                    else if (Digest(Meshes(b)) != a.meshes) { ok = false; Console.WriteLine($"  REJECTED {Path.GetFileName(f)}: meshes changed"); }
+                    else if (Digest(Layouts(b)) != a.layouts) { ok = false; Console.WriteLine($"  REJECTED {Path.GetFileName(f)}: layouts changed"); }
+                    for (int j = 0; ok && j < a.list.Count; ++j)
+                    {
+                        var e = a.list[j];
+                        var g = b.Dummies[j];
+                        if (e.Item1 != g.ReferenceID || e.Item2 != g.ParentBoneIndex ||
+                            e.Item3 != g.AttachBoneIndex || e.Item4 != g.Position)
+                        { ok = false; Console.WriteLine($"  REJECTED {Path.GetFileName(f)}: existing dummy {j} moved (id {e.Item1}->{g.ReferenceID})"); }
+                    }
+                    for (int j = 0; ok && j < ids.Length; ++j)
+                        if (!b.Dummies.Any(d => d.ReferenceID == ids[j]))
+                        { ok = false; Console.WriteLine($"  REJECTED {Path.GetFileName(f)}: appended id {ids[j]} missing after write"); }
+                }
+                if (!ok)
                 {
                     failed++;
                     Console.WriteLine($"  REJECTED {Path.GetFileName(f)}: structure changed -- left untouched");
-                    continue;
-                }
-                bool vanillaIntact = true;
-                for (int i = 0; i < beforeList.Count; i++)
-                {
-                    var a = beforeList[i];
-                    var b = backFlver.Dummies[i];
-                    if (a.ReferenceID != b.ReferenceID || a.ParentBoneIndex != b.ParentBoneIndex ||
-                        a.AttachBoneIndex != b.AttachBoneIndex || a.Position != b.Position) { vanillaIntact = false; break; }
-                }
-                if (!vanillaIntact)
-                {
-                    failed++;
-                    Console.WriteLine($"  REJECTED {Path.GetFileName(f)}: an existing dummy entry changed -- left untouched");
                     continue;
                 }
 
@@ -583,7 +636,7 @@ internal static class Program
                 File.WriteAllBytes(outPath, outBytes);
                 patched++;
                 appended += missing.Length;
-                Console.WriteLine($"  patched {Path.GetFileName(f)}: +{string.Join(",", missing)} ({beforeDummies} -> {flver.Dummies.Count} dummies) {raw.Length} -> {outBytes.Length} bytes");
+                Console.WriteLine($"  patched {Path.GetFileName(f)}: +{string.Join(",", missing)} in {flvers.Count} flver(s) {raw.Length} -> {outBytes.Length} bytes");
             }
             catch (Exception ex)
             {
@@ -595,9 +648,70 @@ internal static class Program
         return failed > 0 ? 1 : 0;
     }
 
-    private static int Dummies(string path)
+    /// <summary>
+    /// Prove that a restore really happened: walk every matching file under a root and report
+    /// which ones still contain the parking dummy ids.  Exit code 0 only when none does, so
+    /// restore scripts and users can rely on it.  This is the command the uninstaller runs at
+    /// the end; "the files look right" is not evidence, "no file contains 382/383" is.
+    /// </summary>
+    private static int VerifyDir(string root, string nameFilter, string idArg)
     {
-        BND4 bnd = ReadBundle(path, out _, out _);
+        s_quiet = true;
+        var ids = new HashSet<short>(idArg.Split(',').Select(s => short.Parse(s.Trim(), CultureInfo.InvariantCulture)));
+        string want = nameFilter.ToLowerInvariant();
+        if (!want.EndsWith(".dcx")) want += ".dcx";
+        var files = Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
+                             .Where(f => Path.GetFileName(f).ToLowerInvariant().EndsWith(want))
+                             .OrderBy(f => f).ToList();
+
+        int hits = 0, flverFiles = 0, unreadable = 0, clean = 0;
+        var hitFiles = new List<string>();
+        foreach (string f in files)
+        {
+            try
+            {
+                BND4 bnd = ReadBundle(f, out _, out _);
+                bool fileHit = false;
+                bool anyFlver = false;
+                foreach (BinderFile bf in bnd.Files)
+                {
+                    if (!EntryName(bf).EndsWith(".flver", StringComparison.OrdinalIgnoreCase)) continue;
+                    anyFlver = true;
+                    FLVER2 v = FLVER2.Read(bf.Bytes);
+                    foreach (short id in ids)
+                        if (v.Dummies.Any(d => d.ReferenceID == id))
+                        {
+                            fileHit = true;
+                            Console.WriteLine($"  HIT {Path.GetFileName(f)}: dummy {id} still present");
+                        }
+                }
+                if (anyFlver) flverFiles++;
+                if (fileHit) { hits++; hitFiles.Add(Path.GetFileName(f)); } else { clean++; }
+            }
+            catch (Exception ex)
+            {
+                unreadable++;
+                Console.WriteLine($"  UNREADABLE {Path.GetFileName(f)}: {ex.Message}");
+            }
+        }
+        Console.WriteLine($"verify: scanned {files.Count} file(s), {flverFiles} with an FLVER, "
+                          + $"unreadable={unreadable}, files still carrying {idArg}: {hits}");
+        if (hits == 0 && unreadable == 0)
+        {
+            Console.WriteLine("verify: CLEAN - no parking dummy left behind");
+        }
+        else if (hits > 0)
+        {
+            Console.WriteLine("verify: files still carrying the dummies: " + string.Join(", ", hitFiles));
+            Console.WriteLine("verify: if those carried the dummies BEFORE this install, that is the"
+                              + " original state and not a leftover; a fresh install has none.");
+        }
+        // exit 0 whenever the scan itself was conclusive; the HIT list is information, not failure
+        return unreadable == 0 ? 0 : 1;
+    }
+
+    private static int Dummies(string path)
+    {        BND4 bnd = ReadBundle(path, out _, out _);
         foreach (BinderFile f in bnd.Files)
         {
             string name = Path.GetFileName((f.Name ?? "").Replace('\\', '/'));

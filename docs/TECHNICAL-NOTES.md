@@ -84,8 +84,14 @@ two different answers for the player and for NPCs**. A player-only version there
   verified before writing.
 * **In game:** with the mod off the shield hangs on the back; with the mod on it is gone, and a
   second independent run reproduces it (screenshots in the release's `evidence\` folder).
-* **Revert:** `restore.ps1` plus `tools\ds3tae.exe stripdir` returns the game folder to a state
-  where no `chr\*.chrbnd.dcx` contains `382`/`383` (verified by `scanid`).
+* **Revert:** `restore.ps1` replays `<game>\.hsleft-manifest.json` and copies every character model
+  back from `.hsleft-backup\chr\`, byte for byte, then `ds3tae verify` proves that no
+  `chr\*.chrbnd.dcx` still contains `382`/`383` (a model that carried them before the install keeps
+  them — that is the pre-install state, and `verify` lists it without failing).  A structural undo
+  (`stripdir`, i.e. `restore.ps1 -AllowLegacy` for 1.0.4-and-older installations) reaches the same
+  dummy-free structure but not the same bytes: re-serialising the BND4 and re-compressing the DCX
+  changes the file (measured: 43,792 -> 47,220 bytes for a model whose dummies were removed again,
+  with an identical decompressed payload).  That is why the installer keeps native copies.
 
 ---
 
@@ -96,12 +102,21 @@ two different answers for the player and for NPCs**. A player-only version there
 | Mode | Purpose |
 |---|---|
 | `parkdir <root> <out\|INPLACE> <ids> [pos] [parentBone] [filter] [DRYRUN]` | append the parking dummies to every bundle, with per-file verification |
-| `stripdir <root> <out\|INPLACE> <ids> [filter] [DRYRUN]` | remove exactly those dummies again |
+| `stripdir <root> <out\|INPLACE> <ids> [filter] [DRYRUN]` | remove exactly those dummies again (structural, not byte-exact) |
+| `verify <root> [filter] [ids]` | prove a restore: list every file that still carries the dummies |
 | `scanid <root> <ids> [filter]` | which files reference these dummy ids |
 | `flverdiff <a> <b>` | structural diff (bones / materials / meshes / layouts / dummies) |
 | `dummies <file>` | list dummy nodes with bone, position, parent bone scale |
 | `inspect <file>` | list sections/entries of a bundle |
 | `dumpids <root> <out> [filter]` | dump every dummy id of every file (set analysis) |
+
+`parkdir` and `stripdir` handle **every FLVER in a bundle**, not only the first one, and each write
+is re-read and verified before it lands (bone list, materials, meshes, buffer layouts and every
+pre-existing dummy entry must be unchanged).  The bundled binary is built from this source; check
+with `ds3tae.exe` (no arguments), which prints the sub-command list.
+
+`tests\roundtrip.ps1` is the end-to-end proof: it builds a scratch game folder, installs, restores
+and fails unless every pre-existing file is byte-identical and nothing is left over.
 
 `research\` contains the scripts used during development, grouped by purpose:
 

@@ -48,10 +48,23 @@
 # 关掉游戏
 powershell -ExecutionPolicy Bypass -File install.ps1
 powershell -ExecutionPolicy Bypass -File install.ps1 -Status     # 看装了什么
-powershell -ExecutionPolicy Bypass -File restore.ps1             # 还原
+powershell -ExecutionPolicy Bypass -File restore.ps1             # 还原（按 manifest 逐字节回放）
+powershell -ExecutionPolicy Bypass -File restore.ps1 -DryRun     # 只报告，不改动
 ```
 
-安装脚本只做复制/改名，覆盖前会留 `*.vanilla-backup`（模型）和 `xinput1_3.dll.dkp-off`（原来的 DKP 加载器）。
+install.ps1 在覆盖任何文件前，先把它**逐字节**复制到 `<游戏>\.hsleft-backup\<同样的相对路径>`，
+并把「原来存不存在 / 改动前后的 SHA-256 / 大小 / 备份路径 / 新建了哪些目录」全部写进
+`<游戏>\.hsleft-manifest.json`。restore.ps1 回放这份 manifest：原文件逐字节放回并校验哈希，
+安装时新建的文件（dll / ini / `chr\c0000.chrbnd.dcx`）删除，新建目录空掉后删除。
+如果某个文件已经不是我们装的那一个（你换过、别的 mod 换过），restore 会停下来说明情况
+（退出码 1）而不是覆盖别人的东西，并保留 manifest 与备份以便重试，`-Force` 才继续。
+
+**为什么必须留原生副本**：只把挂点删掉的「结构还原」不等于原字节——BND4 会重新序列化、
+DCX 会重新压缩（实测：删掉挂点后 43,792 -> 47,220 字节，解压后的载荷完全一致）。
+1.0.4 及更早装的没有 manifest，restore.ps1 不会乱猜；确实要结构还原时加 `-AllowLegacy`。
+
+`xinput1_3.dll.dkp-off` 属于旧流程（1.0.4 的改名备份）；现在这一类文件也走
+`.hsleft-backup\`，restore 会把原来的 `xinput1_3.dll` 原样放回。
 **注意**：这一版的 ini 里 `ExtraMods=` 是空的——之前那份 DKP 加载器在 1.15.0 上会让游戏启动即崩（见 `ds3-test-log.txt`），需要它的话自己填回去。
 
 ## 进游戏怎么验收

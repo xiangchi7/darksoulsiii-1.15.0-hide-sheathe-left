@@ -7,10 +7,14 @@ Default game folder (called <game> below):
 --------------------------------------------------------------------------
 0. Back up first (copy these somewhere safe)
 --------------------------------------------------------------------------
+    The scripts do this for you: install.ps1 copies every file it is about to
+    overwrite to <game>\.hsleft-backup\<same relative path> and records it in
+    <game>\.hsleft-manifest.json.  By hand, back up:
+
+    <game>\chr\*.chrbnd.dcx            (every character model you are about to patch)
     <game>\HideSheathedLeft.dll        (if it already exists)
     <game>\HideSheathedLeft.ini        (if it already exists)
     <game>\xinput1_3.dll               (if it already exists - see step 3)
-    <game>\chr\c0000.chrbnd.dcx        (player model, ~43.8 KB vanilla)
 
 --------------------------------------------------------------------------
 1. Copy the player model
@@ -90,16 +94,23 @@ Default game folder (called <game> below):
 6. Uninstall
 --------------------------------------------------------------------------
     Just switch the effect off:
-        set HideLeftHang=0 and HidePairedOffhand=0 in the ini (applies in ~1 s)
+        set HideLeftHang=0 and HideRightHang=0 in the ini (applies in ~1 s)
 
     Back to vanilla:
+        restore.ps1 does all of this by itself from the manifest; by hand it is
         a) delete <game>\HideSheathedLeft.dll and <game>\HideSheathedLeft.ini;
         b) put your backed-up xinput1_3.dll back (or delete the file if you had
            no other loader);
-        c) delete the loose <game>\chr\*.chrbnd.dcx files - the game falls back
-           to the packed originals - or copy your backups back one by one;
-           to keep the loose files but remove only our dummies, run
+        c) put the character models back from your own copies (step 0).
+           If you have no copies, remove dummy 382/383 from every character model:
              tools\ds3tae.exe stripdir "<game>\chr" INPLACE "382,383" "chrbnd"
+           (add DRYRUN to only see what it would do; prove the result with
+             tools\ds3tae.exe verify "<game>\chr" "chrbnd" "382,383"
+           and read its "files still carrying" line - with a clean game that is 0).
+           The strip restores the models structurally, but a re-serialised bundle
+           is NOT byte-identical to the original (DCX re-compression).  For exact
+           bytes use your own backup, or delete the loose chr\*.chrbnd.dcx files
+           and let the game read the packed ones.
 
 --------------------------------------------------------------------------
 7. Troubleshooting

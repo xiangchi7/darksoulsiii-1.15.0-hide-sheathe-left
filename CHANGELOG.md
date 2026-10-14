@@ -1,5 +1,118 @@
 # Changelog
 
+## 1.0.5
+
+**The uninstall did not work at all, and reports of frame drops have to be taken seriously.**
+This release fixes the uninstall, makes the bundled tool actually work, rebuilds the mod core with
+the same behaviour, and documents the one switch that controls how much CPU the mod uses while you
+play.
+
+### Fixed
+* **The uninstall did not restore the game to its pre-install state.** Three separate reasons:
+  1. `tools\ds3tae.exe` **as shipped in v1.0.4 and earlier** has no `stripdir`/`parkdir`/`scanid`
+     at all: the packaged binary predates those sub-commands, so it answers
+     `usage: validate <file>... | ...` and exits 2 (verified against
+     `publish-1.0.4\...\tools\ds3tae.exe`, 38,912-byte `ds3tae.dll`). `restore.ps1` only printed a
+     warning and carried on, then reported "Restore finished", so **every character model stayed
+     patched and the user had no way to tell**. The tool is rebuilt from source and re-synced into
+     `tools\` (50,688-byte `ds3tae.dll`); running it with no arguments now lists its sub-commands,
+     which is the one-line check for this class of problem.
+  2. `stripdir` only ever touched the **first** FLVER of a bundle (as did `parkdir` and the
+     post-write check), and its `DRYRUN` flag was read from the wrong argument index.
+  3. Even a correct strip is not byte-exact: re-serialising the BND4 and re-compressing the DCX
+     produces a different file (measured 43,792 -> 47,220 bytes for a model whose dummies were
+     removed again, identical decompressed payload). Every character model the installer touched
+     was therefore permanently different from the original, and `chr\c0000.chrbnd.dcx` was left
+     behind on a game that had no loose `chr\` folder before.
+* **`src\build.ps1` could not build at all.** It joined `$PSScriptRoot` + `src` while itself living
+  in `src\`, so every compile failed with `C1083: cannot open source file ...\src\src\...`, and it
+  looked for `HideSheathedLeft.ini` inside `src\`. It now resolves the repository root, writes to
+  `<repo>\dist\` as documented, and works when invoked as `src\build.ps1` (as the README says).
+  This is why the shipped mod binaries had not been rebuilt since 1.0.4 even though the source
+  carries the newer code.
+
+### Changed
+* **The mod core is rebuilt with the same behaviour.** The only source change is the reported
+  version (`kVersion` `1.0.4` -> `1.0.5`, visible in `HideSheathedLeft.log`). No timing, scanning or
+  patching logic was altered, because the frame-drop report below could not be reproduced here in a
+  controlled way -- see "Known issues".
+* `HideSheathedLeft.ini`: the `Rescan` switch is now documented as what it is -- **the one setting
+  that decides how much work the mod does in the background**. `Rescan=1` (default) keeps the
+  self-healing pass that re-finds the parameter tables if the engine rebuilds them; `Rescan=0`
+  stops those extra full passes, so after start-up the worker only reads the rows it already holds.
+  If you see frame-time spikes while playing, this is the switch to try first.
+* `tools\patch-character-models.ps1` gained `-Only <names>` (used by the installer so a re-install
+  never touches a model it already patched) and no longer fails on a game folder without a loose
+  `chr\` — it reports that there is nothing to patch and exits 0.
+* `install.ps1 -Force` (and the existing `restore.ps1 -Force`) skip the "close the game first"
+  check, for scripted round trips only.
+* `install.ps1 -Status` prints the manifest and works without the bundled tool (the `scanid`
+  call used to pass its arguments in the wrong order and needed the rebuilt binary anyway).
+* `ds3tae.exe` with no arguments now prints the full sub-command list instead of a four-command
+  usage line, and `scanid`/`verify` exit 0 for a conclusive scan ("hits found" is a result, not a
+  failure); `install.ps1` therefore always exits 0 unless it really failed.
+* README, `docs\MANUAL-INSTALL.txt`, `docs\TECHNICAL-NOTES.md` and their `zh-CN` counterparts: the
+  uninstall/restore sections were rewritten for the manifest workflow.
+
+### Added
+* **`install.ps1` records everything it does.** Before a file is overwritten it is copied byte for
+  byte to `<game>\.hsleft-backup\<same relative path>`, and `<game>\.hsleft-manifest.json` records,
+  per file, whether it existed, its SHA-256 before and after the install, its size and its backup
+  path, plus every directory the installer created. `chr\*.chrbnd.dcx` files that already carried
+  382/383 (an earlier install, another model mod) are left alone and reported, because no native
+  copy of them exists. A re-install over a previous one keeps the *first* install's originals.
+* **`restore.ps1` replays that manifest**: originals come back byte-exact and are verified against
+  the recorded hash, installer-created files (DLL, ini, `chr\c0000.chrbnd.dcx`) are deleted again,
+  installer-created directories (including an empty `chr\`) are removed. If a file is no longer the
+  one the installer put there, the restore stops and says so (exit 1) instead of overwriting
+  someone else's work, keeps the manifest and backups for a retry, and `-Force` finishes the job.
+* `ds3tae verify <root> [filter] [ids]` — the end-of-restore proof: it lists every file that still
+  carries the parking dummies and states that a model which had them before the install keeping
+  them is the pre-install state, not a leftover.
+* `restore.ps1 -AllowLegacy` — the explicit opt-in for installations made by 1.0.4 or older (no
+  manifest). Without it, `restore.ps1` refuses to guess and changes nothing.
+* `tests\roundtrip.ps1` — installs into a scratch game folder, restores, and fails unless every
+  pre-existing file is byte-identical and nothing is left over; also covers a double install, the
+  "file replaced after the install" safety catch and `-Force`.
+
+### Known issues
+* **Frame-time spikes have been reported with this mod running, and the cause is not established.**
+  What is known: the mod's parameter writes are cheap and only happen when a value differs; the
+  expensive work is the address-space scan, which runs once at start-up and again whenever the held
+  table addresses go stale (`Rescan=1`, the default). That pass walks the process's regions and
+  copies their resident pages to look for the parameter table name, so it scales with how much of
+  your RAM is resident; the log prints what each pass cost, e.g.
+  `scan: 4 table(s); read 0 MB resident, left 7615 MB untouched of 7619 MB seen`. 1.0.1 read
+  non-resident pages as well, which dragged the whole resource pool into physical memory (~4 GB extra
+  in the game's working set) and made the stutter far worse; 1.0.2 fixed that and every version since
+  is resident-only. **If you see stutter, set `Rescan=0`** and check `HideSheathedLeft.log`: with no
+  "rescan" lines after start-up, the mod is reduced to a few memory reads per second. Please report
+  what the log says either way -- this is the one open performance question.
+* The parameter table is shared by the player and NPCs, so an NPC in the same stance hides its
+  sheathed item too (no artefacts: the parking dummy is valid for every character model).
+* The engine keeps several copies of the parameter table in memory and caches resolved attach
+  values, so the effect can occasionally stay off until the next launch ("silent no-op").
+* Online play has a server-side save check — use it offline.
+
+### Notes
+* The uninstall of **1.0.4 and earlier is broken** (see "Fixed" above): those packages cannot strip
+  the character models even if you run their `restore.ps1`, and their `stripdir` is a no-op. If you
+  installed with an older package and want the models back to their original bytes, delete the loose
+  `chr\*.chrbnd.dcx` and re-extract them (UXM), or use this version's `tools\` with
+  `restore.ps1 -AllowLegacy` for a structural (not byte-identical) undo.
+* **Why the version number moved even though the mod behaves the same.** The shipped binaries had
+  not been rebuilt since 1.0.4 while the working tree carried newer source, which is exactly the
+  failure mode that produced the broken tool in the 1.0.4 package. `HideSheathedLeft.dll` and
+  `xinput1_3.dll` in this package are now built from this repository's sources
+  (`src\build.ps1`, MSVC x64), and `HideSheathedLeft.log` reports `1.0.5` so a package and its
+  binary can be matched. Verify with
+  `findstr /c:"1.0.5" HideSheathedLeft.dll` (the string is stored narrow) or by reading the log.
+* Upgrading from 1.0.4 needs `HideSheathedLeft.dll` **and** the `tools\` / scripts from this
+  package. The character-model patch does not have to be re-run if it is already applied.
+* Round-trip proof for this package: `powershell -ExecutionPolicy Bypass -File tests\roundtrip.ps1`
+  ends with `ROUND TRIP OK`, and an install -> restore from the extracted `-full` zip leaves the
+  test game folder with exactly the files it started with.
+
 ## 1.0.4
 
 Makes the effect **symmetric**: two-handing the *left*-hand weapon now hides the right-hand item,
