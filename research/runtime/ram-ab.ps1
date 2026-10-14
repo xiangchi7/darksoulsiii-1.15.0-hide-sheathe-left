@@ -36,7 +36,9 @@ if ($Ini) { Copy-Item -LiteralPath $Ini -Destination (Join-Path $GameDir 'HideSh
 $iniPath = Join-Path $GameDir 'HideSheathedLeft.ini'
 if ($LoadCore -ge 0) {
   # keep the file's own encoding: ASCII stays ASCII, anything else is written back as UTF-8 (no BOM)
-  $txt = Get-Content -LiteralPath $iniPath -Raw
+  # read as UTF-8 explicitly: Get-Content would decode it with the ANSI codepage and mangle
+  # any non-ASCII character in the comments when the file is written back
+  $txt = [System.IO.File]::ReadAllText($iniPath, [System.Text.Encoding]::UTF8)
   if ($txt -notmatch '(?m)^LoadCore=\d+') { throw "no LoadCore= line in $iniPath" }
   $txt = [regex]::Replace($txt, '(?m)^LoadCore=\d+', "LoadCore=$LoadCore")
   $bytes = [System.IO.File]::ReadAllBytes($iniPath)

@@ -67,7 +67,9 @@ function Api([string]$Method, [string]$Uri, $body = $null) {
 $changelog = Join-Path $RepoDir 'CHANGELOG.md'
 $body = ''
 if (Test-Path -LiteralPath $changelog) {
-    $text = Get-Content -LiteralPath $changelog -Raw
+    # read as UTF-8 explicitly: Get-Content would decode it with the ANSI codepage and mangle
+    # every non-ASCII character (em dashes, Chinese) on its way into the release body
+    $text = [System.IO.File]::ReadAllText($changelog, [System.Text.Encoding]::UTF8)
     $m = [regex]::Match($text, "(?ms)^##\s+$([regex]::Escape($Version))\s*\r?\n(.*?)(?=^##\s|\z)")
     if ($m.Success) { $body = "# HideSheathedLeft $Version`n`n" + $m.Groups[1].Value.Trim() }
 }
