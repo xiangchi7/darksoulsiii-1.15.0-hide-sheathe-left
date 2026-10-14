@@ -39,6 +39,12 @@ character — player or NPC — can ever resolve a missing dummy.
 
 ## Install
 
+> **Which download?** `HideSheathedLeft-<version>-full.zip` is the install package (payload in
+> `files\`, plus the screenshot evidence and the reference dumps). `HideSheathedLeft-<version>.zip`
+> is the same mod in repository layout (source, research scripts, validator, full documentation) --
+> `install.cmd` works there too since 1.0.3; it patches all 165 character models with
+> `tools\ds3tae.exe` instead of shipping a pre-patched player model.
+
 1. Close the game.
 2. Double-click **`install.cmd`** (or run `powershell -ExecutionPolicy Bypass -File install.ps1`).
 

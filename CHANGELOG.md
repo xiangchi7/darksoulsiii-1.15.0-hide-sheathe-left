@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.0.3
+
+Packaging fix: `install.cmd` / `install.ps1` now work in the plain (repository) zip as well, so
+both release assets install the same way. The mod core is unchanged -- only the version it logs.
+
+### Fixed
+* **`missing kit file` when installing from `HideSheathedLeft-<version>.zip`.** The installer only
+  looked for the payload in `files\`, which exists in the `-full` package but not in the plain
+  (repository-layout) zip. It now falls back to the script directory, so `install.cmd` is a real
+  one-click install in both packages. The player model (`files\c0000.chrbnd.dcx`) stays optional:
+  when it is absent, the bundled `tools\ds3tae.exe parkdir` patches every `chr\*.chrbnd.dcx`,
+  the player's model included (same result, verified).
+
+### Changed
+* README "Install" now spells out which download is which: `-full.zip` = install package (payload
+  + evidence + reference), plain `.zip` = the same mod in repository layout (source, research
+  scripts, validator, full documentation).
+* `tools\maintainer\publish-1.0.2.ps1` -> `tools\maintainer\publish-release.ps1`; it always took a
+  `-Version` argument, the name no longer claims a single release.
+* `HideSheathedLeft.dll` is functionally identical to 1.0.2 (the search is still resident-only);
+  only the version it writes to `HideSheathedLeft.log` changed, so an existing 1.0.2 installation
+  does not have to replace anything.
+
 ## 1.0.2
 
 Fixes the memory regression of 1.0.1: while looking for the parameter tables the mod read every

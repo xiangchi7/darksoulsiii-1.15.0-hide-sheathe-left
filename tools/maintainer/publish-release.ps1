@@ -1,7 +1,7 @@
 # Publish a HideSheathedLeft release through the GitHub REST API.
 #
-#   powershell -ExecutionPolicy Bypass -File publish-1.0.2.ps1 -Token <PAT>
-#   powershell -ExecutionPolicy Bypass -File publish-1.0.2.ps1 -Token <PAT> -SkipRepoPush
+#   powershell -ExecutionPolicy Bypass -File publish-release.ps1 -Token <PAT>
+#   powershell -ExecutionPolicy Bypass -File publish-release.ps1 -Token <PAT> -SkipRepoPush
 #
 # The script is idempotent: existing tags are reused, existing assets with the same name are
 # deleted and re-uploaded, and an existing release body is replaced with the CHANGELOG section for
@@ -21,7 +21,7 @@ param(
     [string]$Repo = 'HideSheathedLeft',
     [string]$RepoDir = 'C:\Users\35866\Documents\deepseek-harness\default-workspace\HideSheathedLeft-release',
     [string]$Branch = 'main',
-    [string]$Version = '1.0.2',
+    [string]$Version = '1.0.3',
     [string]$Asset = '',
     [string]$FullAsset = '',
     [switch]$SkipRepoPush

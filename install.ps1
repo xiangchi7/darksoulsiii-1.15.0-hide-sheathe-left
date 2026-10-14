@@ -20,7 +20,12 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# The payload lives in files\ inside the install package.  The plain (repository) zip has no files\
+# folder -- there the payload sits next to this script -- so fall back to the script directory and
+# both layouts install exactly the same way.
 $files = Join-Path $PSScriptRoot 'files'
+if (-not (Test-Path -LiteralPath $files)) { $files = $PSScriptRoot }
 
 $targets = @(
     @{ src = 'c0000.chrbnd.dcx';        dst = 'chr\c0000.chrbnd.dcx' },

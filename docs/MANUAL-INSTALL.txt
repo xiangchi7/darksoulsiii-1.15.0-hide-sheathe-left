@@ -1,4 +1,4 @@
-HideSheathedLeft 1.0.2 — manual installation (no scripts required)
+HideSheathedLeft 1.0.3 — manual installation (no scripts required)
 ==================================================================
 Target: Dark Souls III / Steam / 1.15.0 (64-bit)
 Default game folder (called <game> below):
