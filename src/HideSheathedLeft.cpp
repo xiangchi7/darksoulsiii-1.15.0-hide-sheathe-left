@@ -43,6 +43,8 @@
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <psapi.h>
+#pragma comment(lib, "psapi.lib")
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
@@ -52,6 +54,7 @@
 
 namespace {
 
+constexpr char     kVersion[]     = "1.0.2";
 constexpr char     kParamName[]   = "WEP_ABSORP_POS_PARAM_ST";
 constexpr uint64_t kLengthOff     = 0x0A;   // u16 row count inside ParamTable
 constexpr uint64_t kNameOffsetOff = 0x10;   // u64 offset of the snake-case name
@@ -89,6 +92,13 @@ struct Config {
     // WepAbsorpPosParam row data and log who reads them (RIP, registers, the
     // faulting offset) -- used to locate the engine's attach resolver so the mod
     // can later be made player-only.
+    // Scanning policy.  The scan only ever reads pages that are currently resident
+    // (see ScanForTables), so it cannot pull the game's pools back into RAM and it
+    // cannot inflate the working set.  The parameter tables live in private memory;
+    // mapped regions additionally map whole files (loose chr\*.chrbnd.dcx, archives),
+    // which is why they stay off by default even though they are read resident-only now.
+    bool scanMapped        = false;
+    bool allowRescan       = true;    // rescan when every table we hold went stale
     bool probe             = false;
     bool probeAll          = false;   // log every table access, not just leftHang/right1-3
     uint64_t worldChrManOffset = 0x4768E78;   // candidate WorldChrMan pointer (1.15.0), 0 = off
@@ -181,6 +191,8 @@ void LoadConfig() {
         c.paired1 = true;  // unparsable value: fall back to the spare blade only
     }
 
+    c.scanMapped   = GetPrivateProfileIntW(L"general", L"ScanMapped", 0, g_iniPath.c_str()) != 0;
+    c.allowRescan  = GetPrivateProfileIntW(L"general", L"Rescan", 1, g_iniPath.c_str()) != 0;
     c.probe        = GetPrivateProfileIntW(L"general", L"Probe", 0, g_iniPath.c_str()) != 0;
     c.probeAll     = GetPrivateProfileIntW(L"general", L"ProbeAll", 0, g_iniPath.c_str()) != 0;
     wchar_t wcm[32] = {0};
@@ -211,10 +223,11 @@ void LoadConfig() {
     // the fields are pointed at even when nothing was changed from the defaults
     if (changed || !g_loggedConfig) {
         g_loggedConfig = true;
-        Log("config: HideLeftHang=%d HidePairedOffhand=%d PairedFields=%d%d%d IntervalSeconds=%d Log=%d HidePoly=%d Probe=%d",
+        Log("config: HideLeftHang=%d HidePairedOffhand=%d PairedFields=%d%d%d IntervalSeconds=%d Log=%d HidePoly=%d Probe=%d ScanMapped=%d Rescan=%d",
             (int)g_cfg.hideLeftHang, (int)g_cfg.hidePairedOffhand,
             (int)g_cfg.paired1, (int)g_cfg.paired2, (int)g_cfg.paired3,
-            g_cfg.intervalMs / 1000, (int)g_cfg.log, g_cfg.hidePoly, (int)g_cfg.probe);
+            g_cfg.intervalMs / 1000, (int)g_cfg.log, g_cfg.hidePoly, (int)g_cfg.probe,
+            (int)g_cfg.scanMapped, (int)g_cfg.allowRescan);
     }
 }
 
@@ -316,12 +329,76 @@ int ApplyTable(TableState& st, int* writesOut) {
     return rows;
 }
 
-std::vector<uint64_t> ScanForTables() {
+// --- scan accounting, so every scan can prove what it cost --------------------
+uint64_t g_scanReadBytes  = 0;   // bytes actually copied out of the address space
+uint64_t g_scanSkipBytes  = 0;   // bytes deliberately left untouched (not resident)
+uint64_t g_scanTotalBytes = 0;   // committed bytes the pass looked at
+
+std::vector<PSAPI_WORKING_SET_EX_INFORMATION> g_wsQuery;   // reused, never re-allocated per chunk
+
+// Reading a page the OS has trimmed or paged out faults it straight back into
+// physical memory.  That is the entire "installed the mod, the game now uses
+// ~4 GB more" effect: DS3 commits its resource pools up front (a ~7.6 GB commit
+// charge is normal) but only a fraction of those pages is ever resident, so
+// touching all of them makes the whole pool resident at once.
+//
+// Therefore the scan is RESIDENT-ONLY: pages the OS does not currently hold are
+// skipped, never read.  The parameter tables are written by the engine when it
+// loads the regulation data, so they are resident by definition once they exist;
+// when a pass finds nothing the worker just retries a second later instead of
+// forcing the rest of the process into RAM.
+//
+// Reading a MEM_MAPPED region pulls the mapped file's pages in as well (the loose
+// chr\*.chrbnd.dcx, any memory-mapped archive), so mapped regions are skipped
+// unless ScanMapped=1 asks for them explicitly -- and even then only their
+// resident pages are read.
+
+// resident[i] = page i of [base, base+len) is in the working set.
+// Returns false when the OS will not answer, in which case the range must not
+// be touched at all.
+bool QueryResidency(uint64_t base, size_t len, std::vector<uint8_t>& resident) {
+    const size_t pages = (len + 0xFFF) / 0x1000;
+    if (!pages) return false;
+    g_wsQuery.resize(pages);
+    for (size_t i = 0; i < pages; ++i)
+        g_wsQuery[i].VirtualAddress = (PVOID)(base + i * 0x1000);
+    if (!QueryWorkingSetEx(GetCurrentProcess(), g_wsQuery.data(),
+                           (DWORD)(pages * sizeof(g_wsQuery[0]))))
+        return false;
+    resident.assign(pages, 0);
+    for (size_t i = 0; i < pages; ++i)
+        resident[i] = g_wsQuery[i].VirtualAttributes.Valid ? 1 : 0;
+    return true;
+}
+
+// Search one contiguous resident run for the param-table name.  addrBase is the
+// address p[0] was read from, so a hit can be resolved to its table head.
+void SearchRun(const uint8_t* p, size_t n, uint64_t addrBase, std::vector<uint64_t>& found) {
+    const size_t nameLen = sizeof(kParamName) - 1;
+    size_t i = 0;
+    while (i + nameLen <= n) {
+        const void* hit = memchr(p + i, kParamName[0], n - i - (nameLen - 1));
+        if (!hit) break;
+        const size_t idx = (size_t)((const uint8_t*)hit - p);
+        if (memcmp(p + idx, kParamName, nameLen) == 0) {
+            uint64_t table = 0;
+            if (ResolveTableFromName(addrBase + idx, &table)) {
+                bool dup = false;
+                for (uint64_t t : found) if (t == table) { dup = true; break; }
+                if (!dup) found.push_back(table);
+            }
+        }
+        i = idx + 1;
+    }
+}
+
+std::vector<uint64_t> ScanForTables(bool includeMapped) {
     std::vector<uint64_t> found;
     SYSTEM_INFO si;
     GetSystemInfo(&si);
     const size_t nameLen = sizeof(kParamName) - 1;
     std::vector<uint8_t> buf(kScanChunk + nameLen);
+    std::vector<uint8_t> resident;
 
     uint8_t* addr = (uint8_t*)si.lpMinimumApplicationAddress;
     const uint8_t* maxAddr = (const uint8_t*)si.lpMaximumApplicationAddress;
@@ -333,35 +410,65 @@ std::vector<uint64_t> ScanForTables() {
         const size_t size = mbi.RegionSize;
 
         const bool usable = mbi.State == MEM_COMMIT &&
-                            (mbi.Type == MEM_PRIVATE || mbi.Type == MEM_MAPPED) &&
+                            (mbi.Type == MEM_PRIVATE || (includeMapped && mbi.Type == MEM_MAPPED)) &&
                             !(mbi.Protect & PAGE_GUARD) && !(mbi.Protect & PAGE_NOACCESS);
         if (usable && size) {
             for (size_t off = 0; off < size; off += kScanChunk) {
                 size_t n = size - off;
                 if (n > kScanChunk + nameLen) n = kScanChunk + nameLen;
-                if (!SafeCopy(buf.data(), base + off, n)) continue;
+                g_scanTotalBytes += n;
 
-                size_t i = 0;
-                while (i + nameLen <= n) {
-                    void* hit = memchr(buf.data() + i, kParamName[0], n - i - (nameLen - 1));
-                    if (!hit) break;
-                    const size_t idx = (size_t)((uint8_t*)hit - buf.data());
-                    if (memcmp(buf.data() + idx, kParamName, nameLen) == 0) {
-                        uint64_t table = 0;
-                        if (ResolveTableFromName((uint64_t)(base + off + idx), &table)) {
-                            bool dup = false;
-                            for (uint64_t t : found) if (t == table) { dup = true; break; }
-                            if (!dup) found.push_back(table);
+                if (!QueryResidency((uint64_t)(base + off), n, resident)) {
+                    g_scanSkipBytes += n;      // cannot tell -> do not touch it at all
+                    continue;
+                }
+
+                // Read maximal runs of resident pages and nothing else.
+                size_t readInChunk = 0;
+                size_t pg = 0;
+                while (pg < resident.size()) {
+                    if (!resident[pg]) { ++pg; continue; }
+                    size_t end = pg;
+                    while (end < resident.size() && resident[end]) ++end;
+                    size_t runStart = pg * 0x1000;
+                    size_t runLen   = end * 0x1000;
+                    if (runLen > n) runLen = n;
+                    if (runLen > runStart) {
+                        runLen -= runStart;
+                        if (SafeCopy(buf.data(), base + off + runStart, runLen)) {
+                            readInChunk += runLen;
+                            SearchRun(buf.data(), runLen,
+                                      (uint64_t)(base + off + runStart), found);
                         }
                     }
-                    i = idx + 1;
+                    pg = end;
                 }
+                g_scanReadBytes += readInChunk;
+                g_scanSkipBytes += n - readInChunk;
             }
         }
         if (!size) break;
         addr = base + size;
     }
     return found;
+}
+
+// One line per scan: how much memory the scan actually touched, and where the
+// process's working set stands right after it.
+void LogScan(const char* what, size_t tables) {
+    PROCESS_MEMORY_COUNTERS pmc = {0};
+    unsigned long long wsMB = 0, peakMB = 0;
+    if (K32GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc))) {
+        wsMB   = (unsigned long long)(pmc.WorkingSetSize >> 20);
+        peakMB = (unsigned long long)(pmc.PeakWorkingSetSize >> 20);
+    }
+    Log("%s: %zu table(s); read %llu MB resident, left %llu MB untouched of %llu MB seen; working set %llu MB (peak %llu MB)",
+        what, tables,
+        (unsigned long long)(g_scanReadBytes >> 20),
+        (unsigned long long)(g_scanSkipBytes >> 20),
+        (unsigned long long)(g_scanTotalBytes >> 20),
+        wsMB, peakMB);
+    g_scanReadBytes = g_scanSkipBytes = g_scanTotalBytes = 0;
 }
 
 // ------------------------------------------------------- engine-reader probe
@@ -659,7 +766,11 @@ DWORD WINAPI Worker(LPVOID) {
     std::vector<TableState> tables;
 
     for (int attempt = 0; attempt < 600; ++attempt) {
-        std::vector<uint64_t> found = ScanForTables();
+        std::vector<uint64_t> found = ScanForTables(g_cfg.scanMapped);
+        // The scan never reads a page the OS has paged out and never falls back to
+        // a full read: if the table is not resident yet, the engine has not loaded
+        // it yet, so wait for it instead of dragging the game's pools into RAM.
+        if (!found.empty() || (attempt % 10) == 0) LogScan("scan", found.size());
         if (!found.empty()) {
             tables.clear();
             for (uint64_t t : found) {
@@ -685,7 +796,8 @@ DWORD WINAPI Worker(LPVOID) {
             // them is the live one; re-scan often at first and arm every copy we find
             if (tick == 30 || tick == 60 || tick == 100 || tick == 150 || tick == 200 ||
                 tick == 300 || tick == 400 || tick == 600 || tick == 1200) {
-                std::vector<uint64_t> found = ScanForTables();
+                std::vector<uint64_t> found = ScanForTables(g_cfg.scanMapped);
+                LogScan("probe rescan", found.size());
                 std::vector<TableState> extra;
                 for (uint64_t t : found) {
                     bool have = false;
@@ -717,9 +829,10 @@ DWORD WINAPI Worker(LPVOID) {
             Log("applied %d field write(s) over %d row(s) in %d table(s)",
                 writes, rowsTotal, live);
         }
-        if (!tables.empty() && live == 0) {
+        if (!tables.empty() && live == 0 && g_cfg.allowRescan) {
             Log("tables went stale, rescanning");
-            std::vector<uint64_t> found = ScanForTables();
+            std::vector<uint64_t> found = ScanForTables(g_cfg.scanMapped);
+            LogScan("rescan", found.size());
             tables.clear();
             for (uint64_t t : found) {
                 TableState st;
@@ -745,7 +858,7 @@ BOOL APIENTRY DllMain(HMODULE mod, DWORD reason, LPVOID) {
         g_iniPath = dir + L"\\HideSheathedLeft.ini";
         g_logPath = dir + L"\\HideSheathedLeft.log";
         LoadConfig();
-        Log("--- HideSheathedLeft loaded (pid %lu) ---", GetCurrentProcessId());
+        Log("--- HideSheathedLeft %s loaded (pid %lu) ---", kVersion, GetCurrentProcessId());
         if (HANDLE th = CreateThread(nullptr, 0, Worker, nullptr, 0, nullptr)) {
             CloseHandle(th);
         }

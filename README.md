@@ -17,7 +17,7 @@ staves.
 | Left item **in use** (blocking / swinging) | drawn normally | **drawn normally** (unaffected) |
 | **Paired weapon** in the right hand, one-handed | spare model sits on the body | spare model **not drawn** (`PairedFields` can hide only the blade and keep the scabbard) |
 
-**How (1.0.1):** the `leftHang_0..3` and `right_1..3` fields of `WepAbsorpPosParam` are pointed at
+**How (1.0.2):** the `leftHang_0..3` and `right_1..3` fields of `WepAbsorpPosParam` are pointed at
 a **parking dummy** (id `382`, with `383` as a spare) that sits **1000 m below the character**.
 The model is still attached, just far outside the world — so nothing is drawn, and because the
 dummy is a *real* dummy (not an invalid poly like `-1` in 1.0.0) the engine builds a valid matrix,
@@ -82,7 +82,7 @@ tools\ds3tae.exe stripdir "<game>\chr" INPLACE "382,383" "chrbnd"
 ## Known limitations
 
 * **NPCs hide the item too.** The parameter table is shared between the player and NPCs, and
-  1.0.1 makes the parking dummy valid for every character model, so an NPC in the same stance
+  the mod makes the parking dummy valid for every character model, so an NPC in the same stance
   simply does not draw its sheathed left item instead of producing artefacts. Making it
   player-only requires patching the engine's attach resolver — see
   [`docs/TECHNICAL-NOTES.md`](docs/TECHNICAL-NOTES.md) for the code sites already identified
@@ -140,7 +140,8 @@ src\ validator\           sources
 | Tag | What |
 |---|---|
 | `v1.0.0` | first approach: wrote an invalid dummy poly (`-1`). Worked, but the retail engine built a degenerate matrix from it → black triangles + full-screen flicker. Kept as history (and as a way to reproduce the bug for comparison). |
-| `v1.0.1` | current: parks the model at a real dummy 1000 m below the character and appends that dummy to every character model. No artefacts. |
+| `v1.0.1` | parks the model at a real dummy 1000 m below the character and appends that dummy to every character model. No artefacts — but while looking for the parameter tables it read every committed page of the process, which made the game appear to use ~4 GB more RAM (fixed in 1.0.2). |
+| `v1.0.2` | current: identical behaviour, but the table search is resident-only, so the game's memory footprint is indistinguishable from vanilla (peak working set 1624 MB vs vanilla 1634 MB; 1.0.1 was 6007 MB). |
 
 ## Notes
 
@@ -148,6 +149,9 @@ src\ validator\           sources
   **your own** `chr\*.chrbnd.dcx` files (and verifies that everything else stays byte-identical).
 * `install.ps1` backs up every file it overwrites as `*.vanilla-backup`, so `restore.ps1` can
   always undo it.
+* Memory: the table scan only reads pages the OS currently holds resident, so it cannot pull the
+  game's paged-out resource pools back into RAM. `HideSheathedLeft.log` prints what each scan cost
+  — see `docs\MEMORY-FIX-1.0.2.md`.
 * Only one `xinput1_3.dll` can live in the game folder: if another mod (e.g. a key-prompt mod)
   already owns that slot, the installer renames it to `xinput1_3.dll.dkp-off` and keeps it.
   The two mods cannot be active at the same time.

@@ -1,4 +1,4 @@
-# Technical notes — HideSheathedLeft 1.0.1
+# Technical notes — HideSheathedLeft 1.0.2
 
 Everything below was verified on Dark Souls III **1.15.0** (Steam, 64-bit) on
 2026-10-14. Addresses are given as `exe+RVA` so they survive ASLR; they are specific to this
@@ -139,3 +139,51 @@ were evaluated:
 (`HideEquippedWeapon`) is per-character by construction (it lives in `c0000.anibnd.dcx`), but its
 window semantics mean the event would have to be present in every animation played while the item
 is sheathed, including locomotion shared with the one-handed stance.
+
+---
+
+## 6. Locating the parameter tables without inflating the working set
+
+The mod does not follow a pointer chain to the tables. It searches its own address space for the
+string `WEP_ABSORP_POS_PARAM_ST` and reconstructs the table head from the surrounding `ParamTable`
+header. 1.0.1 read **every committed page** while doing that, `MEM_MAPPED` regions included, and it
+repeated the scan once a second until the table showed up.
+
+That is what made the game appear to use ~4 GB more RAM. DS3 commits its resource pools during
+start-up — a ~8 GB commit charge with only ~1.6 GB resident is normal at the main menu — and
+reading a page the OS has paged out faults it straight back into physical memory, so the scan made
+the whole pool resident at once. Reading a mapped region does the same to the mapped file's pages
+(the loose `chr\*.chrbnd.dcx`, any memory-mapped archive).
+
+1.0.2 makes the search resident-only:
+
+* `QueryResidency()` asks `QueryWorkingSetEx` for the per-page `Valid` bit; `ScanForTables()` then
+  copies only maximal runs of resident pages. A range the OS will not answer for is skipped
+  entirely instead of being read "conservatively".
+* No scan ever falls back to a full read. If the table is not resident, the engine has not loaded
+  it yet, so the worker sleeps one second and retries (600 attempts = 10 minutes).
+* `ScanMapped=1` (ini) additionally considers `MEM_MAPPED` regions, but reads only their resident
+  pages, so the switch can no longer pull mapped files into RAM.
+* The parameter tables are written by the engine when it loads the regulation data, so they are
+  resident by definition once they exist — a resident-only search does find them. Verified in game:
+  4 tables, 364 rows, 2548 field writes, identical to what 1.0.1 reported.
+
+Every scan logs its own cost, which is what makes this checkable from a user's log file:
+
+```
+scan: 4 table(s); read 1131 MB resident, left 29680 MB untouched of 30812 MB seen; working set 811 MB (peak 815 MB)
+```
+
+Measured on the same save and launch procedure, sampled every 2 s for 100 s (`LoadCore` in the ini
+as the on/off switch):
+
+| build | peak working set | system free RAM at end |
+|---|---|---|
+| vanilla (mod not loaded) | 1634 MB | 13661 MB |
+| 1.0.1 | 6007 MB | 9588 MB |
+| 1.0.2 | 1624 MB | 13610 MB |
+
+Interleaved A/B/A/B of 1.0.2 on vs off: steady-state working set 1613.0 MB vs 1610.5 MB (+2.5 MB,
+below the run-to-run spread). The only visible cost is a ~5 MB peak while the scan runs, from the
+4 MB scan buffer. `docs\MEMORY-FIX-1.0.2.md` has the full data; the harnesses are in
+`research\runtime\`.

@@ -1,5 +1,45 @@
 # Changelog
 
+## 1.0.2
+
+Fixes the memory regression of 1.0.1: while looking for the parameter tables the mod read every
+committed page of the process, which dragged the game's whole (mostly paged-out) resource pool
+back into physical RAM. Behaviour is unchanged — same tables, same writes, same result.
+
+### Fixed
+* **The game using ~4 GB more RAM.** Windows had paged out most of DS3's pre-committed resource
+  pools (~8 GB committed, ~1.6 GB resident); reading a paged-out page faults it back into physical
+  memory, and reading `MEM_MAPPED` regions pulled mapped files in as well, so the scan made the
+  whole pool resident at once. Measured with the same launch procedure, sampled every 2 s for
+  100 s: 1.0.1 peaked at **6007 MB**, vanilla at **1634 MB**, 1.0.2 at **1624 MB**.
+* The resident-only mitigation of the 1.0.1 development builds never took effect: every scan that
+  failed to find the table fell back to a full read of private **and** mapped memory.
+
+### Changed
+* The table search is resident-only: `QueryWorkingSetEx` decides per page and only maximal runs of
+  resident pages are copied. Pages the OS does not currently hold are skipped, never read.
+* All full-read fallbacks are gone. If the table is not resident yet, the engine has not loaded it
+  yet, so the worker waits one second and retries (600 attempts = 10 minutes).
+* `ScanMapped=1` now only widens which regions are considered; their pages are still read
+  resident-only, so the switch can no longer inflate the working set.
+* The log now records the build version and what every scan cost, e.g. `scan: 4 table(s); read 0 MB
+  resident, left 7615 MB untouched of 7619 MB seen; working set 1420 MB (peak 1520 MB)`.
+* `docs\TECHNICAL-NOTES.md` gained section 6 (locating the tables without inflating the working
+  set) and `HideSheathedLeft.ini` documents the scan policy.
+
+### Added
+* `docs\MEMORY-FIX-1.0.2.md` (+ `docs\zh-CN\MEMORY-FIX-1.0.2.zh-CN.md`): the mechanism, the raw
+  measurements and how to confirm the fix from `HideSheathedLeft.log`.
+* `research\runtime\scan-test.cpp` + `research\runtime\ram-ab.ps1`: the harnesses used to measure it
+  (a synthetic stand-in for DS3's memory layout, and the in-game A/B/A/B run).
+
+### Notes
+* Upgrading from 1.0.1 only needs `HideSheathedLeft.dll` (plus the ini for the new documentation);
+  the character-model patch does **not** have to be re-run.
+* The mod's own footprint is a few MB: a 4 MB scan buffer that is reused per pass plus the table
+  snapshot (a few KB per table). Interleaved on/off A/B/A/B in game measured +2.5 MB steady-state
+  working set — below the run-to-run spread.
+
 ## 1.0.1
 
 Fixes the fatal rendering problem of 1.0.0 and turns the "parking dummy" into a form that is safe
