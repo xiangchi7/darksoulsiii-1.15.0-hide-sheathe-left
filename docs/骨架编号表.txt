@@ -1,0 +1,130 @@
+C0000 player skeleton - bone index table (this is the space the
+WepAbsorpPosParam leftHang_* fields index into)
+
+verified: 0 = model root, 11 = L_Thigh (shield hung at the leg/feet)
+
+idx  name
+   0  Master                         <- tested
+   1  Master                      
+   2  L_Foot_Target2              
+   3  L_Foot_Target1              
+   4  L_Foot_Target               
+   5  R_Foot_Target2              
+   6  R_Foot_Target1              
+   7  R_Foot_Target               
+   8  RootPos                     
+   9  Pelvis                         <- inside the body (candidate: hidden)
+  10  L_Hip                       
+  11  L_Thigh                        <- tested
+  12  L_Calf                      
+  13  L_Calf_Skirt                
+  14  L_CalfTwist                 
+  15  L_CalfTwist1                
+  16  L_Foot                      
+  17  L_FootTwist                 
+  18  L_Toe0                      
+  19  L_Knee                      
+  20  L_Knee_Skirt                
+  21  L_Thigh_Skirt               
+  22  L_ThighTwist                
+  23  L_ThighTwist1               
+  24  L_Wepon_Case                   <- weapon case (vanilla sheath spot)
+  25  R_Hip                       
+  26  R_Thigh                     
+  27  R_Calf                      
+  28  R_Calf_Skirt                
+  29  R_CalfTwist                 
+  30  R_CalfTwist1                
+  31  R_Foot                      
+  32  R_FootTwist                 
+  33  R_Toe0                      
+  34  R_Knee                      
+  35  R_Knee_Skirt                
+  36  R_Thigh_Skirt               
+  37  R_ThighTwist                
+  38  R_ThighTwist1               
+  39  R_Wepon_Case                   <- weapon case (vanilla sheath spot)
+  40  RootRotY                    
+  41  RootRotXZ                   
+  42  Spine                          <- inside the body (candidate: hidden)
+  43  Spine1                         <- inside the body (candidate: hidden)
+  44  Spine2                         <- inside the body (candidate: hidden)
+  45  B_Wepon_Case                   <- weapon case (vanilla sheath spot)
+  46  B_Wepon_Case0_L                <- weapon case (vanilla sheath spot)
+  47  B_Wepon_Case0_R                <- weapon case (vanilla sheath spot)
+  48  Collar                         <- inside the body (candidate: hidden)
+  49  L_Clavicle                     <- inside the body (candidate: hidden)
+  50  L_Shoulder                  
+  51  L_UpperArm                  
+  52  L_Elbow                     
+  53  L_Forearm                   
+  54  L_ForeArmTwist              
+  55  L_ForeArmTwist1             
+  56  L_Hand                      
+  57  L_Finger0                   
+  58  L_Finger01                  
+  59  L_Finger02                  
+  60  L_Finger1                   
+  61  L_Finger11                  
+  62  L_Finger12                  
+  63  L_Finger2                   
+  64  L_Finger21                  
+  65  L_Finger22                  
+  66  L_Finger3                   
+  67  L_Finger31                  
+  68  L_Finger32                  
+  69  L_Finger4                   
+  70  L_Finger41                  
+  71  L_Finger42                  
+  72  L_Shield                    
+  73  L_Weapon                    
+  74  L_UpArmTwist                
+  75  L_UpArmTwist1               
+  76  L_Pectoral                  
+  77  L_Po                        
+  78  Neck                        
+  79  Head                        
+  80  R_Clavicle                     <- inside the body (candidate: hidden)
+  81  R_Shoulder                  
+  82  R_UpperArm                  
+  83  R_Elbow                     
+  84  R_Forearm                   
+  85  R_ForeArmTwist              
+  86  R_ForeArmTwist1             
+  87  R_Hand                      
+  88  R_Finger0                   
+  89  R_Finger01                  
+  90  R_Finger02                  
+  91  R_Finger1                   
+  92  R_Finger11                  
+  93  R_Finger12                  
+  94  R_Finger2                   
+  95  R_Finger21                  
+  96  R_Finger22                  
+  97  R_Finger3                   
+  98  R_Finger31                  
+  99  R_Finger32                  
+ 100  R_Finger4                   
+ 101  R_Finger41                  
+ 102  R_Finger42                  
+ 103  R_Shield                    
+ 104  R_Weapon                    
+ 105  R_UpArmTwist                
+ 106  R_UpArmTwist1               
+ 107  R_Pectoral                  
+ 108  R_Po                        
+ 109  SpineArmor1                 
+ 110  SpineArmor2                 
+ 111  90W5                        
+ 112  *07`                        
+ 113  bX&=                        
+ 114  EfW<                        
+ 115  =PI(                        
+ 116  |E?=                        
+ 117  =#3t                        
+ 118  PE?=                        
+ 119  =@<Y                        
+ 120  =V3t=                       
+ 121   $}=                        
+
+total names after Master: 122

@@ -1,0 +1,21 @@
+# build artefacts
+dist/
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+bin/
+obj/
+validator/bin/
+validator/obj/
+
+# local / machine specific
+*.log
+*.user
+*.suo
+.vs/
+chr-stripped/
+chr-patched/
+probes/out/
+dumps/

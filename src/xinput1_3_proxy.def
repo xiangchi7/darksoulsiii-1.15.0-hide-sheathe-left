@@ -1,0 +1,13 @@
+LIBRARY xinput1_3
+
+; Mirror the complete export table of the real xinput1_3.dll
+; (ordinal / name pairs as reported by `dumpbin /exports C:\Windows\System32\xinput1_3.dll`)
+EXPORTS
+    DllMain=ProxyDllMainEntry @1
+    XInputGetState @2
+    XInputSetState @3
+    XInputGetCapabilities @4
+    XInputEnable @5
+    XInputGetDSoundAudioDeviceGuids @6
+    XInputGetBatteryInformation @7
+    XInputGetKeystroke @8
