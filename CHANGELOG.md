@@ -2,41 +2,52 @@
 
 ## 1.0.1
 
-修复 1.0.0 的致命显示问题，并把"停放挂点"做成所有角色都安全的形式。
+Fixes the fatal rendering problem of 1.0.0 and turns the "parking dummy" into a form that is safe
+for every character model.
 
 ### Fixed
-* **黑三角 + 全屏闪烁**：1.0.0 把 `leftHang_0..3` / `right_1..3` 直接写成无效挂点 `-1`，
-  零售引擎会因此构造退化（NaN）矩阵。现在改为指向**真实存在的远处挂点**，不再有该现象。
-* `HidePoly` 可配置：想在哪个停放挂点上面就在哪个上面（`382` / `383` / 任意 id，`-1` 才回到旧行为）。
+* **Black triangles + full-screen flicker.** 1.0.0 wrote an invalid poly (`-1`) into
+  `leftHang_0..3` / `right_1..3`; the retail engine builds a degenerate (NaN) attach matrix from
+  that. The fields now point at a **real dummy that sits far away**, so the artefacts are gone.
+* `HidePoly` is configurable: point the fields at `382`, `383` or any other dummy id
+  (only `-1` restores the old behaviour).
 
 ### Added
-* `tools\ds3tae.exe`：
-  * `parkdir` — 给 `chr\*.chrbnd.dcx` 里每个模型追加挂点 382/383 于 `(0,-1000,0)`；
-    **逐文件校验**（骨骼表 / 材质 / 网格 / 缓冲布局必须不变、原挂点条目必须一条没动），不通过就不写；
-  * `stripdir` — 精确移除指定挂点，用来撤销模型补丁；
-  * `scanid` / `flverdiff` / `dummies` / `inspect` — 校验与排查。
-* `install.ps1` 现在会**自动完成模型补丁**（可直接双击 `一键安装.cmd`）。
-* `PairedFields` — 选择隐藏成对武器的哪些模型（`1` 只隐藏副手刀刃、保留刀鞘）。
-* `Probe` 诊断模式：只观察不写数据，把"谁在读挂点字段 / 调用栈 / 指针图谱"写进日志。
-* 文档：`docs\手动安装说明.txt`、`docs\技术说明.md`（含逆向结论与验证证据）。
+* `tools\ds3tae.exe`:
+  * `parkdir` — append dummies 382/383 at `(0,-1000,0)` to every `chr\*.chrbnd.dcx`, with a
+    per-file verification (bone list, materials, meshes and buffer layouts must be unchanged and
+    every original dummy entry must stay untouched; otherwise the file is left alone);
+  * `stripdir` — remove exactly those dummies again (used to undo the model patch);
+  * `scanid`, `flverdiff`, `dummies`, `inspect` — validation and troubleshooting.
+* `install.ps1` now performs the character-model patch itself, so `install.cmd` really is
+  one click.
+* `PairedFields` — choose which models of a paired weapon are hidden (`1` hides only the spare
+  blade and keeps the scabbard).
+* `Probe` diagnostic mode: writes nothing, logs who reads the attach fields, with call stacks and
+  a pointer map.
+* Documentation: `docs\MANUAL-INSTALL.txt`, `docs\TECHNICAL-NOTES.md` (mechanism + verified
+  evidence + reverse-engineering results), both also available in `docs\zh-CN\`.
 
 ### Changed
-* 默认停放挂点 = **382**，并追加到**全部 165 个角色模型**（玩家 + NPC）。
-  参数表 PC/NPC 共用，这样任何角色解析到它都拿到**有效**挂点：NPC 不再出现黑三角/穿模，
-  代价是 NPC 收起状态的左手道具也一起不可见（详见 README 的"已知限制"）。
-* 默认重写间隔 1 秒；`HidePairedOffhand` 默认开启。
+* Default parking dummy is **382**, appended to **all 165 character models** (player and NPC).
+  Because the parameter table is shared, this makes any character resolve a *valid* dummy: NPCs
+  no longer produce artefacts, at the cost of also not drawing their sheathed left item.
+* Parameter values are re-asserted every second by default; `HidePairedOffhand` defaults to on.
 
 ### Documented
-* 根因说明：引擎把挂点解析结果**缓存在角色结构**里，运行时很少读共享参数表；
-  内存中存在多份参数表副本，因此可能出现"改到了表但没改到引擎实际使用的那份"（静默失效）。
-* 逆向结论（供后续做"只影响玩家"的版本）：挂点选择器 `exe+0xE31690`、全 exe 唯一调用点
-  `exe+0xE35125`、访问器入口 `exe+0xE350D0`（`rcx`=角色侧道具槽对象、`r8`=模型序号、
-  `r9`=左右 0/1、`rdx`=输出），字段偏移 `+0x0A/+0x14/+0x1E/+0x28 = leftHang_0..3`、
-  `+0x0C/+0x16/+0x20/+0x2A = rightHang_0..3`。
+* Root cause of the occasional silent failure: the engine **caches** the resolved attach values
+  per character and rarely re-reads the shared parameter table, and it keeps several copies of
+  that table in memory — so a write can land on a copy the engine is not using.
+* Reverse-engineering results, for a future player-only version: the hang-dummy selector
+  `exe+0xE31690`, its single call site `exe+0xE35125`, the accessor wrapper `exe+0xE350D0`
+  (`rcx` = character-side item-slot object, `r8` = model index, `r9` = side 0/1, `rdx` = output
+  pointer) and the field offsets `+0x0A/+0x14/+0x1E/+0x28 = leftHang_0..3`,
+  `+0x0C/+0x16/+0x20/+0x2A = rightHang_0..3`.
 
 ## 1.0.0
 
-* 第一版：把 `WepAbsorpPosParam` 的 `leftHang_0..3` / `right_1..3` 写成 `-1`（无效挂点），
-  双持右手武器时隐藏左手道具的收起模型；成对武器单持时隐藏副手模型。
-* 提供 `xinput1_3.dll` 加载器壳（转发 XInput 1..8）与 ini 热配置。
-* 已知问题：无效挂点导致黑三角 + 全屏闪烁（1.0.1 修复）。
+* First release: writes `-1` (an invalid poly) into `WepAbsorpPosParam`'s `leftHang_0..3` /
+  `right_1..3`, so the sheathed model of the left-hand item is hidden while the right-hand weapon
+  is two-handed; hides the spare model of a one-handed paired weapon.
+* Ships the `xinput1_3.dll` loader shell (forwards XInput 1..8) and a hot-reloadable ini.
+* Known issue: the invalid poly causes black triangles and full-screen flicker (fixed in 1.0.1).

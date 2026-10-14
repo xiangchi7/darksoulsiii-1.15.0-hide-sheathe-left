@@ -1,0 +1,115 @@
+HideSheathedLeft 1.0.1 — manual installation (no scripts required)
+==================================================================
+Target: Dark Souls III / Steam / 1.15.0 (64-bit)
+Default game folder (called <game> below):
+    D:\Steam\steamapps\common\DARK SOULS III\Game
+
+--------------------------------------------------------------------------
+0. Back up first (copy these somewhere safe)
+--------------------------------------------------------------------------
+    <game>\HideSheathedLeft.dll        (if it already exists)
+    <game>\HideSheathedLeft.ini        (if it already exists)
+    <game>\xinput1_3.dll               (if it already exists - see step 3)
+    <game>\chr\c0000.chrbnd.dcx        (player model, ~43.8 KB vanilla)
+
+--------------------------------------------------------------------------
+1. Copy the player model
+--------------------------------------------------------------------------
+    files\c0000.chrbnd.dcx  ->  <game>\chr\c0000.chrbnd.dcx      (overwrite, ~47.2 KB)
+
+    It only appends two dummies (382 / 383) at (0, -1000, 0) to the end of the
+    player model. Nothing vanilla is modified.
+    (If this file is missing from your download, step 4 adds those dummies to the
+    player model too - the patcher walks the whole chr\ folder.)
+
+--------------------------------------------------------------------------
+2. Copy the mod core and its configuration
+--------------------------------------------------------------------------
+    files\HideSheathedLeft.dll  ->  <game>\HideSheathedLeft.dll      (~213 KB)
+    files\HideSheathedLeft.ini  ->  <game>\HideSheathedLeft.ini
+
+    ini defaults (already usable):
+        HideLeftHang=1        core effect: hide the sheathed left-hand item
+        HidePairedOffhand=1   hide the spare model of a one-handed paired weapon
+        PairedFields=1,2,3    which right-hand models to hide (1 = blade only)
+        HidePoly=382          parking dummy id (383 spare, -1 = old artefacts)
+        IntervalSeconds=1     re-assert the values every second
+        ExtraMods=            must stay empty
+        Probe=0               0 = normal use, 1 = observation only (diagnostics)
+
+--------------------------------------------------------------------------
+3. Copy the loader shell (xinput1_3.dll)
+--------------------------------------------------------------------------
+    files\xinput1_3.dll  ->  <game>\xinput1_3.dll                    (~197 KB)
+
+    Its only job is to make the game load our DLL: it poses as xinput1_3 and
+    forwards XInput exports 1..8 to the system DLL, so controllers are unaffected.
+
+    * If another mod already owns <game>\xinput1_3.dll (a key-prompt mod, a DKP
+      loader, ...), overwriting it disables that mod. Either rename that file
+      first (e.g. to xinput1_3.dll.old) or load HideSheathedLeft.dll with
+      ModEngine instead - then skip this step.
+    * Only one xinput1_3.dll can be active at a time.
+
+--------------------------------------------------------------------------
+4. Character-model patch (dummies 382/383 in every chr\*.chrbnd.dcx)
+--------------------------------------------------------------------------
+    The player model was handled in step 1; the other 164 character models need
+    the bundled patcher (editing 165 files by hand is not practical):
+
+        cd <this folder>
+        powershell -ExecutionPolicy Bypass -File tools\patch-character-models.ps1 -DryRun
+        powershell -ExecutionPolicy Bypass -File tools\patch-character-models.ps1
+
+    Equivalent direct command:
+        tools\ds3tae.exe parkdir "<game>\chr" INPLACE "382,383" "0,-1000,0" 0 "chrbnd"
+
+    Each file is verified before it is written (bone list, materials, meshes and
+    buffer layouts must be unchanged and every original dummy entry must stay
+    untouched); files that already have 382/383 are skipped, so running it twice
+    is harmless. Close the game first.
+
+--------------------------------------------------------------------------
+5. Verify
+--------------------------------------------------------------------------
+    Start the game and look at <game>\HideSheathedLeft.log. It should contain:
+
+        config: HideLeftHang=1 HidePairedOffhand=1 PairedFields=111 IntervalSeconds=1 Log=1 HidePoly=382 Probe=0
+        param tables located: 5
+        applied 3185 field write(s) over 455 row(s) in 5 table(s)
+
+    "applied ..." means the parameter writes are working. In game:
+      * left hand holding a shield/weapon, right-hand weapon two-handed -> the
+        left item should be invisible (not on your back);
+      * cancel the two-hand grip or attack with the left hand -> it comes back.
+
+    No log or no "applied": make sure Probe=0 and ExtraMods is empty, and that
+    HideSheathedLeft.dll and xinput1_3.dll are directly in <game>.
+
+--------------------------------------------------------------------------
+6. Uninstall
+--------------------------------------------------------------------------
+    Just switch the effect off:
+        set HideLeftHang=0 and HidePairedOffhand=0 in the ini (applies in ~1 s)
+
+    Back to vanilla:
+        a) delete <game>\HideSheathedLeft.dll and <game>\HideSheathedLeft.ini;
+        b) put your backed-up xinput1_3.dll back (or delete the file if you had
+           no other loader);
+        c) delete the loose <game>\chr\*.chrbnd.dcx files - the game falls back
+           to the packed originals - or copy your backups back one by one;
+           to keep the loose files but remove only our dummies, run
+             tools\ds3tae.exe stripdir "<game>\chr" INPLACE "382,383" "chrbnd"
+
+--------------------------------------------------------------------------
+7. Troubleshooting
+--------------------------------------------------------------------------
+* Black triangles / flicker again: set HidePoly=383 in the ini (applies in ~1 s).
+  If it persists, chr\c0000.chrbnd.dcx was not replaced (check: ~47.2 KB).
+* After some launches the item stays on your back (no artefacts): known
+  multi-copy parameter-table issue; restarting the game normally fixes it.
+* One character or weapon looks wrong: delete that loose
+  chr\<character>.chrbnd.dcx to roll back that single file.
+* After a model/armour mod replaced chr\*.chrbnd.dcx: re-run step 4.
+* Online: this mod only changes local memory and local model files, but online
+  play has a server-side save check - use it offline.
