@@ -1,4 +1,4 @@
-HideSheathedLeft 1.0.5 — manual installation (no scripts required)
+HideSheathedLeft 1.0.6 — manual installation (no scripts required)
 ==================================================================
 Target: Dark Souls III / Steam / 1.15.0 (64-bit)
 Default game folder (called <game> below):
@@ -150,9 +150,12 @@ Where things are in THIS package
 --------------------------------------------------------------------------
 7. Troubleshooting
 --------------------------------------------------------------------------
-* Black triangles / flicker: set HidePoly=383 in the ini (applies in ~1 s).
-  If it persists, the model patch (step 3) did not reach that character:
-  run tools\ds3tae.exe verify "<game>\chr" chrbnd "382,383".
+* Black triangles / flicker: a character model has no dummy 382/383, so the engine builds a
+  degenerate attach matrix. Prove it with
+    tools\ds3tae.exe verify "<game>\chr" chrbnd "382,383"
+  - "files still carrying 382,383" must equal the number of scanned files. If it is lower,
+  re-run step 3 (1.0.6 prints and enforces "N of N character model(s) carry dummy 382/383").
+  Setting HidePoly=383 in the ini only helps when the models really carry 383.
 * After some launches the item stays on your back (no artefacts): known
   multi-copy parameter-table issue; restarting the game normally fixes it.
 * One character or weapon looks wrong: delete that loose

@@ -40,7 +40,8 @@ param(
 $ErrorActionPreference = 'Stop'
 $ManifestName = '.hsleft-manifest.json'
 $BackupName   = '.hsleft-backup'
-$Version      = '1.0.5'
+$Version      = '1.0.6'
+$modelFail    = $false
 
 # Where is the game?  A hard-coded D:\... path (as in 1.0.3 and earlier) fails for everyone whose
 # game lives on another drive or in another Steam library, so go looking for it instead:
@@ -331,6 +332,29 @@ if (-not $SkipModels) {
 
         if ($need.Count -gt 0) {
             & $patcher -GameDir $GameDir -Only (($need | ForEach-Object { $_.Name }) -join ',')
+            $patchCode = $LASTEXITCODE
+            if ($patchCode -ne 0) {
+                Write-Host ''
+                Write-Host ("ERROR: the character-model patcher exited with {0} - some models may still" -f $patchCode)
+                Write-Host '       have no parking dummy, which is what makes the sheathed item flash'
+                Write-Host '       (black triangles / full-screen flicker).  Re-run install.ps1; if it keeps'
+                Write-Host '       failing, run tools\patch-character-models.ps1 by hand and read its output.'
+                $modelFail = $true
+            }
+            # belt and braces: look at the result instead of trusting the patcher's own words
+            if (Test-Path -LiteralPath $tool) {
+                $vtext = (& $tool verify $chrDir 'chrbnd' '382,383' 2>&1 | Out-String)
+                $carry = 0
+                $flvers = 0
+                if ($vtext -match 'scanned \d+ file\(s\), (\d+) with an FLVER') { $flvers = [int]$Matches[1] }
+                if ($vtext -match 'files still carrying 382,383: (\d+)') { $carry = [int]$Matches[1] }
+                Write-Host ("  verified: {0} of {1} character model(s) carry dummy 382/383" -f $carry, $flvers)
+                if ($flvers -gt 0 -and $carry -lt $flvers) {
+                    Write-Host ("  ERROR: {0} model(s) still have no parking dummy - do NOT play like this," -f ($flvers - $carry))
+                    Write-Host '         the sheathed item will flicker with black triangles.'
+                    $modelFail = $true
+                }
+            }
         } else {
             Write-Host '  every model is already patched - nothing to do'
         }
@@ -370,4 +394,11 @@ Write-Host 'HideSheathedLeft.log in the game folder must contain "HidePoly=" and
 Write-Host 'To uninstall: run restore.ps1 (it replays the manifest, so the game returns to its exact'
 Write-Host 'pre-install bytes) or install.ps1 -Status to see what is installed right now.'
 # exit codes must be ours: the bundled tools report "hits found" with 1, which is not a failure here
+if ($modelFail) {
+    Write-Host ''
+    Write-Host 'FINISHED WITH ERRORS: the character models did not all receive dummy 382/383.'
+    Write-Host 'The sheathed-item flicker (black triangles) comes from exactly that.  Re-run install.ps1'
+    Write-Host 'or run tools\patch-character-models.ps1 by hand; restore.ps1 undoes everything exactly.'
+    exit 1
+}
 exit 0

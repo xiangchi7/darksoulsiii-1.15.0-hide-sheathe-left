@@ -150,6 +150,11 @@ go stale (`Rescan=1`, the default, keeps the effect self-healing).
   the mod can only rewrite the ones it finds, so occasionally the copy the engine actually reads
   is missed: the item stays on your back (no artefacts) until the next launch. Root cause: the
   engine **caches** the resolved attach values per character and rarely re-reads the table.
+* **Black triangles / flicker.** That is the 1.0.0 artefact and it means a character model has no
+  dummy 382/383, so the engine builds a degenerate attach matrix. Prove it in one command:
+  `tools\ds3tae.exe verify "<game>\chr" chrbnd "382,383"` — the answer you want is
+  `scanned N file(s), N with an FLVER … files still carrying 382,383: N`. If it reports fewer,
+  run `install.cmd` again (1.0.6 and later verify this themselves and refuse to claim success).
 * **1.0.4 and earlier cannot uninstall.** Their packaged `tools\ds3tae.exe` has no `stripdir`, and
   their `restore.ps1` reported success while leaving every character model patched. Use this
   version's scripts and `tools\`; see the Uninstall section above.
@@ -172,8 +177,13 @@ docs\MANUAL-INSTALL.txt       step-by-step manual install
 
 ## Version lineage
 
-Current build: **1.0.5**. Earlier builds are no longer distributed: 1.0.0 drew artefacts (black
-triangles, full-screen flicker), 1.0.1 used ~4 GB more RAM, and 1.0.4 and older cannot uninstall.
+Current build: **1.0.6**. Earlier builds are no longer distributed: 1.0.0 drew artefacts (black
+triangles, full-screen flicker), 1.0.1 used ~4 GB more RAM, 1.0.4 and older cannot uninstall, and
+1.0.5 could leave the character models **unpatched** — `-Only` staged the models in `%TEMP%`, the
+hardlink failed whenever the game sat on another drive, the copy fallback patched a temp copy that
+was then deleted, and nothing checked the result, so the flicker came back. 1.0.6 stages the patch
+inside `chr\` and both `install.ps1` and `patch-character-models.ps1` now print and enforce
+`N of N character model(s) carry dummy 382/383`; the mod itself is unchanged.
 For an installation made by 1.0.4 or older, use this version's `tools\` with
 `restore.ps1 -AllowLegacy`.
 

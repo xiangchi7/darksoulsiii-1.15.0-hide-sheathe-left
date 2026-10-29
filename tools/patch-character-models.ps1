@@ -36,19 +36,26 @@ if (-not (Test-Path -LiteralPath $chr)) {
 $running = Get-Process -Name 'DarkSoulsIII' -ErrorAction SilentlyContinue
 if ($running) { throw "DarkSoulsIII.exe is running (pid $($running.Id)) - close the game first" }
 
-# ds3tae parkdir has no per-file argument, so a -Only run gets a private folder with just
-# those files hardlinked into it: no copying, and the tool edits are still in place.
+# ds3tae parkdir has no per-file argument, so a -Only run patches a private folder that holds
+# just those files.  That folder MUST live on the same volume as chr\: a hardlink across drives
+# throws, and a silent copy fallback then patches a temp copy that is deleted again -- which is
+# exactly how 1.0.5 shipped unpatched models and the 1.0.0 flicker came back.  Anything that
+# cannot be hardlinked is copied back over the original after the run.
 $scanRoot = $chr
 $links = $null
+$copied = New-Object System.Collections.ArrayList
 if ($Only) {
     $names = @($Only.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-    $links = Join-Path ([System.IO.Path]::GetTempPath()) ("hsleft-park-" + [guid]::NewGuid().ToString('N'))
-    New-Item -ItemType Directory -Path $links | Out-Null
+    $links = Join-Path $chr ('.hsleft-park-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $links -Force | Out-Null
     foreach ($n in $names) {
         $src = Join-Path $chr $n
-        if (Test-Path -LiteralPath $src) {
-            try { New-Item -ItemType HardLink -Path (Join-Path $links $n) -Target $src -ErrorAction Stop | Out-Null }
-            catch { Copy-Item -LiteralPath $src -Destination (Join-Path $links $n) -Force }
+        $dst = Join-Path $links $n
+        if (-not (Test-Path -LiteralPath $src)) { continue }
+        try { New-Item -ItemType HardLink -Path $dst -Target $src -ErrorAction Stop | Out-Null }
+        catch {
+            Copy-Item -LiteralPath $src -Destination $dst -Force
+            [void]$copied.Add($n)
         }
     }
     $scanRoot = $links
@@ -63,12 +70,47 @@ try {
         & $tool parkdir $scanRoot INPLACE "382,383" "0,-1000,0" 0 "chrbnd"
     }
     $code = $LASTEXITCODE
+
+    if (-not $DryRun -and $copied.Count -gt 0) {
+        foreach ($n in $copied) {
+            $staged = Join-Path $links $n
+            $orig = Join-Path $chr $n
+            if (-not (Test-Path -LiteralPath $staged)) { continue }
+            $a = (Get-FileHash -LiteralPath $staged -Algorithm SHA256).Hash
+            $b = (Get-FileHash -LiteralPath $orig -Algorithm SHA256).Hash
+            if ($a -ne $b) {
+                Copy-Item -LiteralPath $staged -Destination $orig -Force
+                Write-Host ("  copied {0} back (no hardlink possible on this volume)" -f $n)
+            }
+        }
+    }
 } finally {
     if ($links -and (Test-Path -LiteralPath $links)) { Remove-Item -LiteralPath $links -Recurse -Force -ErrorAction SilentlyContinue }
 }
 if ($code -ne 0) { Write-Host "WARNING: parkdir exited with $code - check the lines above" }
 
+# Never claim success without checking: every model that has an FLVER must now carry 382/383.
+# A model without them is exactly what produces the black triangles / full-screen flicker.
+if (-not $DryRun) {
+    $vtext = (& $tool verify $chr 'chrbnd' '382,383' 2>&1 | Out-String)
+    $verified = 0
+    $expected = 0
+    if ($vtext -match 'scanned \d+ file\(s\), (\d+) with an FLVER') { $expected = [int]$Matches[1] }
+    if ($vtext -match 'files still carrying 382,383: (\d+)') { $verified = [int]$Matches[1] }
+    Write-Host ''
+    Write-Host ("verification: {0} of {1} character model(s) carry dummy 382/383" -f $verified, $expected)
+    if ($expected -gt 0 -and $verified -lt $expected) {
+        Write-Host ''
+        Write-Host ("ERROR: {0} model(s) still carry no parking dummy - the sheathed item would flash" -f ($expected - $verified))
+        Write-Host '       (black triangles / full-screen flicker).  Re-run this script; if it keeps'
+        Write-Host '       failing, make sure the game folder is writable and no antivirus blocks the'
+        Write-Host '       files.  restore.ps1 puts every model back to its pre-install bytes.'
+        exit 1
+    }
+}
+
 Write-Host ''
 Write-Host 'done. Every chr\*.chrbnd.dcx named above now carries dummy 382/383 at (0,-1000,0).'
 Write-Host 'install.ps1 keeps a byte-exact copy of every model before patching it, so restore.ps1 can'
 Write-Host 'undo this exactly.  If you patched by hand, your own backup is what makes that possible.'
+exit 0
