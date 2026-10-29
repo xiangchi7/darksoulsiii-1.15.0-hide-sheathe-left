@@ -1,8 +1,20 @@
-HideSheathedLeft 1.0.4 — manual installation (no scripts required)
+HideSheathedLeft 1.0.5 — manual installation (no scripts required)
 ==================================================================
 Target: Dark Souls III / Steam / 1.15.0 (64-bit)
 Default game folder (called <game> below):
     D:\Steam\steamapps\common\DARK SOULS III\Game
+
+Where things are in THIS package
+    HideSheathedLeft.dll      ->  <game>\HideSheathedLeft.dll
+    HideSheathedLeft.ini      ->  <game>\HideSheathedLeft.ini
+    xinput1_3.dll             ->  <game>\xinput1_3.dll
+    tools\ds3tae.exe          ->  the model patcher/validator (stays here)
+    tools\patch-character-models.ps1
+
+    There is no files\ folder: since 1.0.3 the package ships the payload at its
+    root and patches the character models in your own chr\ folder instead of
+    shipping a pre-patched player model.  (1.0.4-and-older *release* zips put
+    the same three files under files\; the paths below are the root ones.)
 
 --------------------------------------------------------------------------
 0. Back up first (copy these somewhere safe)
@@ -14,37 +26,34 @@ Default game folder (called <game> below):
     <game>\chr\*.chrbnd.dcx            (every character model you are about to patch)
     <game>\HideSheathedLeft.dll        (if it already exists)
     <game>\HideSheathedLeft.ini        (if it already exists)
-    <game>\xinput1_3.dll               (if it already exists - see step 3)
+    <game>\xinput1_3.dll               (if it already exists - see step 2)
 
 --------------------------------------------------------------------------
-1. Copy the player model
+1. Copy the mod core and its configuration
 --------------------------------------------------------------------------
-    files\c0000.chrbnd.dcx  ->  <game>\chr\c0000.chrbnd.dcx      (overwrite, ~47.2 KB)
+    HideSheathedLeft.dll  ->  <game>\HideSheathedLeft.dll      (~211 KB)
+    HideSheathedLeft.ini  ->  <game>\HideSheathedLeft.ini
 
-    It only appends two dummies (382 / 383) at (0, -1000, 0) to the end of the
-    player model. Nothing vanilla is modified.
-    (If this file is missing from your download, step 4 adds those dummies to the
-    player model too - the patcher walks the whole chr\ folder.)
-
---------------------------------------------------------------------------
-2. Copy the mod core and its configuration
---------------------------------------------------------------------------
-    files\HideSheathedLeft.dll  ->  <game>\HideSheathedLeft.dll      (~213 KB)
-    files\HideSheathedLeft.ini  ->  <game>\HideSheathedLeft.ini
-
-    ini defaults (already usable):
-        HideLeftHang=1        core effect: hide the sheathed left-hand item
-        HidePairedOffhand=1   hide the spare model of a one-handed paired weapon
-        PairedFields=1,2,3    which right-hand models to hide (1 = blade only)
-        HidePoly=382          parking dummy id (383 spare, -1 = old artefacts)
+    The ini defaults are already usable; the keys that matter:
+        HideLeftHang=1        hide the sheathed left-hand item (two-handing the
+                              RIGHT weapon)
+        HideRightHang=1       mirror image (two-handing the LEFT weapon)
+        HideBothPaired=1      hide the spare model of a one-handed paired weapon,
+                              both hands (the old name HidePairedOffhand still
+                              works when HideBothPaired is absent)
+        PairedFields=1,2,3    which models of a paired weapon to hide
+                              (1 = blade only, none = leave paired weapons alone)
+        HidePoly=382          parking dummy id (383 spare, -1 = old 1.0.0 artefacts)
         IntervalSeconds=1     re-assert the values every second
-        ExtraMods=            must stay empty
+        Rescan=1              0 = stop the periodic address-space re-scan
+                              (the performance switch - see step 5)
         Probe=0               0 = normal use, 1 = observation only (diagnostics)
+        ExtraMods=            must stay empty (extra DLLs crash 1.15.0)
 
 --------------------------------------------------------------------------
-3. Copy the loader shell (xinput1_3.dll)
+2. Copy the loader shell (xinput1_3.dll)
 --------------------------------------------------------------------------
-    files\xinput1_3.dll  ->  <game>\xinput1_3.dll                    (~197 KB)
+    xinput1_3.dll  ->  <game>\xinput1_3.dll                    (~193 KB)
 
     Its only job is to make the game load our DLL: it poses as xinput1_3 and
     forwards XInput exports 1..8 to the system DLL, so controllers are unaffected.
@@ -54,41 +63,67 @@ Default game folder (called <game> below):
       first (e.g. to xinput1_3.dll.old) or load HideSheathedLeft.dll with
       ModEngine instead - then skip this step.
     * Only one xinput1_3.dll can be active at a time.
+    * install.ps1 handles this for you: it renames a foreign xinput1_3.dll to
+      xinput1_3.dll.dkp-off and puts it back on restore.
 
 --------------------------------------------------------------------------
-4. Character-model patch (dummies 382/383 in every chr\*.chrbnd.dcx)
+3. Character-model patch (dummies 382/383 in every chr\*.chrbnd.dcx)
 --------------------------------------------------------------------------
-    The player model was handled in step 1; the other 164 character models need
-    the bundled patcher (editing 165 files by hand is not practical):
+    Editing 165 files by hand is not practical - use the bundled patcher:
 
         cd <this folder>
         powershell -ExecutionPolicy Bypass -File tools\patch-character-models.ps1 -DryRun
         powershell -ExecutionPolicy Bypass -File tools\patch-character-models.ps1
+        powershell -ExecutionPolicy Bypass -File tools\patch-character-models.ps1 -GameDir "F:\...\Game"
 
-    Equivalent direct command:
+    Equivalent direct command (append two dummies at (0,-1000,0) to every model):
+
         tools\ds3tae.exe parkdir "<game>\chr" INPLACE "382,383" "0,-1000,0" 0 "chrbnd"
 
     Each file is verified before it is written (bone list, materials, meshes and
     buffer layouts must be unchanged and every original dummy entry must stay
     untouched); files that already have 382/383 are skipped, so running it twice
-    is harmless. Close the game first.
+    is harmless.  Close the game first.
+
+    The dummies must exist in every model or a character in the same stance gets
+    a degenerate attachment matrix (black triangles / flicker).
 
 --------------------------------------------------------------------------
-5. Verify
+4. Verify
 --------------------------------------------------------------------------
     Start the game and look at <game>\HideSheathedLeft.log. It should contain:
 
-        config: HideLeftHang=1 HidePairedOffhand=1 PairedFields=111 IntervalSeconds=1 Log=1 HidePoly=382 Probe=0
-        param tables located: 5
-        applied 3185 field write(s) over 455 row(s) in 5 table(s)
+        config: HideLeftHang=1 HideRightHang=1 HideBothPaired=1 PairedFields=R.../L... IntervalSeconds=1 Log=1 HidePoly=382 Probe=0 ScanMapped=0 Rescan=1
+        param tables located: <n>
+        applied <n> field write(s) over <n> row(s) in <n> table(s)
 
-    "applied ..." means the parameter writes are working. In game:
+    "applied ..." means the parameter writes are working.  In game:
       * left hand holding a shield/weapon, right-hand weapon two-handed -> the
         left item should be invisible (not on your back);
-      * cancel the two-hand grip or attack with the left hand -> it comes back.
+      * two-hand the left weapon -> the right item is invisible instead;
+      * hold a paired weapon one-handed -> the spare blade is not drawn;
+      * cancel the two-hand grip or attack with the sheathed hand -> it comes back.
 
     No log or no "applied": make sure Probe=0 and ExtraMods is empty, and that
     HideSheathedLeft.dll and xinput1_3.dll are directly in <game>.
+
+    To prove the model side (install.ps1 and restore.ps1 run the same check):
+
+        tools\ds3tae.exe verify "<game>\chr" chrbnd "382,383"
+
+    A fresh install reports the models that carry the dummies; a finished restore
+    reports "verify: CLEAN - no parking dummy left behind".
+
+--------------------------------------------------------------------------
+5. If it stutters
+--------------------------------------------------------------------------
+    Set Rescan=0 in the ini.  The one-time start-up scan is what walks the
+    process's memory regions; with Rescan=0 nothing re-scans after it and the mod
+    is reduced to a few reads per second.  Trade-off: if the engine rebuilds its
+    parameter table mid-session the effect can stay off until the next launch.
+    HideSheathedLeft.log records what each pass cost, e.g.
+        scan: 4 table(s); read 0 MB resident, left 7615 MB untouched of 7619 MB seen; working set ...
+    No scan lines in the log means the mod is not what is costing you frames.
 
 --------------------------------------------------------------------------
 6. Uninstall
@@ -104,9 +139,9 @@ Default game folder (called <game> below):
         c) put the character models back from your own copies (step 0).
            If you have no copies, remove dummy 382/383 from every character model:
              tools\ds3tae.exe stripdir "<game>\chr" INPLACE "382,383" "chrbnd"
-           (add DRYRUN to only see what it would do; prove the result with
-             tools\ds3tae.exe verify "<game>\chr" "chrbnd" "382,383"
-           and read its "files still carrying" line - with a clean game that is 0).
+           (add DRYRUN as the last argument to only see what it would do; prove
+             the result with tools\ds3tae.exe verify "<game>\chr" chrbnd "382,383"
+             - with a clean game that ends in "verify: CLEAN").
            The strip restores the models structurally, but a re-serialised bundle
            is NOT byte-identical to the original (DCX re-compression).  For exact
            bytes use your own backup, or delete the loose chr\*.chrbnd.dcx files
@@ -115,12 +150,61 @@ Default game folder (called <game> below):
 --------------------------------------------------------------------------
 7. Troubleshooting
 --------------------------------------------------------------------------
-* Black triangles / flicker again: set HidePoly=383 in the ini (applies in ~1 s).
-  If it persists, chr\c0000.chrbnd.dcx was not replaced (check: ~47.2 KB).
+* Black triangles / flicker: set HidePoly=383 in the ini (applies in ~1 s).
+  If it persists, the model patch (step 3) did not reach that character:
+  run tools\ds3tae.exe verify "<game>\chr" chrbnd "382,383".
 * After some launches the item stays on your back (no artefacts): known
   multi-copy parameter-table issue; restarting the game normally fixes it.
 * One character or weapon looks wrong: delete that loose
   chr\<character>.chrbnd.dcx to roll back that single file.
-* After a model/armour mod replaced chr\*.chrbnd.dcx: re-run step 4.
+* After a model/armour mod replaced chr\*.chrbnd.dcx: re-run step 3
+  (already-patched files are skipped).
+* NPCs hide the item too: the parameter table is shared and the dummies are
+  valid for every model, so an NPC in the same stance does not draw its
+  sheathed item either.
 * Online: this mod only changes local memory and local model files, but online
   play has a server-side save check - use it offline.
+
+==========================================================================
+中文速查
+==========================================================================
+包结构：HideSheathedLeft.dll / HideSheathedLeft.ini / xinput1_3.dll 就在包根目录，
+tools\ 里是模型补丁工具；没有 files\ 子目录（1.0.3 起改为直接给你自己游戏里的
+chr\ 打补丁，不再附带预修补的 c0000 模型）。
+
+安装（游戏必须关闭）
+  1) 三个文件复制到 <游戏>\Game\：HideSheathedLeft.dll、HideSheathedLeft.ini、
+     xinput1_3.dll。若已有别的 mod 占用 xinput1_3.dll，先把它改名备份，或改用
+     ModEngine 加载本 mod 并跳过这一步。
+  2) 双击包里的 install.cmd：自动完成 1) 并给 chr\*.chrbnd.dcx 追加 382/383 两个
+     停放 dummy。手工做等价于：
+       powershell -ExecutionPolicy Bypass -File tools\patch-character-models.ps1
+     加 -DryRun 只看不动，加 -GameDir "F:\...\Game" 指定非默认游戏目录。
+  3) 其等价的直接命令：
+       tools\ds3tae.exe parkdir "<游戏>\chr" INPLACE "382,383" "0,-1000,0" 0 "chrbnd"
+
+验证
+  游戏里看 <游戏>\Game\HideSheathedLeft.log，出现
+    config: HideLeftHang=1 HideRightHang=1 HideBothPaired=1 ...
+    param tables located: <n>
+    applied <n> field write(s) over <n> row(s) in <n> table(s)
+  说明参数写入生效。双手持右手武器时，左手的挂件不再挂在背上；双手持左手武器时
+  反之；单手持成对武器时备用刀身不再绘制。
+  模型侧的证明：
+    tools\ds3tae.exe verify "<游戏>\chr" chrbnd "382,383"
+
+卡顿
+  ini 里设 Rescan=0，只保留启动时那一次扫描，之后每秒只有几次读取。代价是引擎
+  中途重建参数表时，效果可能要等下次启动才生效。
+
+卸载
+  只关效果：ini 里 HideLeftHang=0、HideRightHang=0（1 秒内生效）。
+  彻底还原：双击 restore.cmd（按 .hsleft-manifest.json 逐字节还原，并扫描 chr\
+  报告是否还有残留）。手工则删掉 dll/ini、还原 xinput1_3.dll，并用
+    tools\ds3tae.exe stripdir "<游戏>\chr" INPLACE "382,383" "chrbnd"
+  去掉 dummy（structural，重打包后不是逐字节等同原版；要完全一致请用你自己的备份）。
+
+已知限制
+  NPC 同样会隐藏挂件（参数表共享、dummy 对每个模型都有效）；偶发“静默失效”
+  （引擎缓存了挂接值，重启游戏恢复）；只改本地内存和本地模型文件，联机有服务端
+  存档校验，请离线使用。
