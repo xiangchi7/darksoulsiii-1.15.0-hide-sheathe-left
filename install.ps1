@@ -207,9 +207,7 @@ foreach ($t in $targets) {
             Write-Host "no prebuilt chr\c0000.chrbnd.dcx in this package - the model patcher will handle it"
             continue
         }
-        throw ("missing kit file: $src`n" +
-               "This folder looks like the git repository, not the release package.`n" +
-               "Download HideSheathedLeft-1.0.5.zip from https://github.com/xiangchi7/darksoulsiii-1.15.0-hide-sheathe-left/releases/latest and run install.ps1 from the extracted folder.")
+        throw "missing kit file: $src"
     }
 
     $dstDir = Split-Path -Parent $dst

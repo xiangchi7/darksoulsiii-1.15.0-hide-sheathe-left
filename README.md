@@ -41,9 +41,8 @@ character — player or NPC — can ever resolve a missing dummy.
 
 ## Install
 
-1. Download **`HideSheathedLeft-1.0.5.zip`** from [Releases](../../releases/latest) and extract it (the DLLs are not in git).
-2. Close the game.
-3. Double-click **`install.cmd`** (or run `powershell -ExecutionPolicy Bypass -File install.ps1`).
+1. Close the game.
+2. Double-click **`install.cmd`** (or run `powershell -ExecutionPolicy Bypass -File install.ps1`).
 
 It copies the payload into the game folder and then appends dummy 382/383 to every
 `chr\*.chrbnd.dcx` (each file is verified before writing; files that already have the dummies are
@@ -162,15 +161,14 @@ go stale (`Rescan=1`, the default, keeps the effect self-healing).
 ## Repository layout
 
 ```
+HideSheathedLeft.dll / .ini   mod core and its configuration
+xinput1_3.dll                 loader shell (forwards the system XInput)
 install.cmd / install.ps1     install (payload + character-model patch)
 restore.cmd / restore.ps1     uninstall
+tools\ds3tae.exe              model patch / validation tool (+ SoulsFormats.dll)
 tools\patch-character-models.ps1
 docs\MANUAL-INSTALL.txt       step-by-step manual install
 ```
-
-The binaries — `HideSheathedLeft.dll` / `.ini`, `xinput1_3.dll` and `tools\ds3tae.exe`
-(+ `SoulsFormats.dll`) — ship in the release zip, next to these scripts. The scripts look for them
-in `files\` and then in their own folder, so the zip layout and an old-style clone both work.
 
 ## Version lineage
 
