@@ -1,0 +1,10 @@
+# install payload ships in the Release zip, not in git
+HideSheathedLeft.dll
+HideSheathedLeft.ini
+xinput1_3.dll
+tools/ds3tae.exe
+tools/ds3tae.dll
+tools/ds3tae.deps.json
+tools/ds3tae.runtimeconfig.json
+tools/SoulsFormats.dll
+*.zip
